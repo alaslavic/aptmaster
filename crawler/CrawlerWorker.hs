@@ -10,6 +10,7 @@ import Network.Browser
 import Data.List
 import Text.Regex.PCRE as PCRE
 import Text.HTML.Yuuko
+import Text.HTML.TagSoup
 
 data CrawlerContext = CrawlerContext
     { config :: CrawlerConfig
@@ -35,7 +36,6 @@ data CrawlerRecord = CrawlerRecord
     { uri :: String
     , title :: String
     , price :: Int
-    , description :: String
     , address :: String
     , mapuri :: String
     , walkscore :: Int
@@ -64,17 +64,33 @@ getCLLinks url = do
 fillCLRecord :: String -> IO CrawlerRecord
 fillCLRecord link = do
     pagetext <- fetchPage link
+    address <- getAddress pagetext
     return CrawlerRecord
         { uri=link
         , title=(getTitle pagetext)
         , price=(getPrice pagetext)
-        , description=""
         , address=""
         , mapuri=""
         , walkscore=0
         , transcore=0
         , wsuri=""
         }
+
+getAddress :: String -> IO String
+getAddress raw = collectAddresses  $ extractTexts raw
+    where
+    extractTexts :: String -> [String]
+    extractTexts = map (\(TagText text) -> text ) $ filter isTagText $ parseTags $ head $ yuuko "//body"
+
+collectAddresses :: [String] -> [String]
+collectAddresses = foldr collect [] 
+    where
+    collect :: [String] -> String -> [String]
+    collect ps consider = ps
+
+getGeoCode :: String -> IO String
+getGeoCode raw = return "foo"
+
 
 getTitle :: String -> String
 getTitle text = head $ yuuko "//title" text

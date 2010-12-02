@@ -11,6 +11,7 @@ import Data.List
 import Text.Regex.PCRE as PCRE
 import Text.HTML.Yuuko
 import Text.HTML.TagSoup
+import Text.URI
 
 data CrawlerContext = CrawlerContext
     { config :: CrawlerConfig
@@ -37,6 +38,8 @@ data CrawlerRecord = CrawlerRecord
     , title :: String
     , price :: Int
     , address :: String
+    , lat :: Double
+    , long :: Double
     , mapuri :: String
     , walkscore :: Int
     , transcore :: Int
@@ -70,6 +73,8 @@ fillCLRecord link = do
         , title=(getTitle pagetext)
         , price=(getPrice pagetext)
         , address=""
+        , lat=0
+        , long=0
         , mapuri=""
         , walkscore=0
         , transcore=0
@@ -77,20 +82,40 @@ fillCLRecord link = do
         }
 
 getAddress :: String -> IO String
-getAddress raw = collectAddresses  $ extractTexts raw
+getAddress raw = return $ head $ collectAddresses  $ extractTexts raw
     where
     extractTexts :: String -> [String]
-    extractTexts = map (\(TagText text) -> text ) $ filter isTagText $ parseTags $ head $ yuuko "//body"
+    extractTexts = (map (\(TagText text) -> text )) . (filter isTagText) . parseTags . head . (yuuko "//body")
+
+getLinkedAddresses :: String -> [String]
+getLinkedAddresses = (foldr collapse [] ) (filter wanted) . (map (\x -> parseURI x)) . ( yuuko "//a/@href" )
+    where
+        collapse :: String -> [String] -> [String]
+        collapse href ads =
+            let qs = (parseURI href) >>= uriQuery >>= (\x -> return $ queryToPairs x)
+            in
+                | uri == Nothing -> ads
+                | otherwise -> getAd ads uri
+        wanted :: Maybe URI -> Bool
+        wanted Nothing = False
+        wanted Just uri = 
 
 collectAddresses :: [String] -> [String]
 collectAddresses = foldr collect [] 
     where
-    collect :: [String] -> String -> [String]
-    collect ps consider = ps
+    collect :: String -> [String] -> [String]
+    collect consider ps = ps
 
-getGeoCode :: String -> IO String
-getGeoCode raw = return "foo"
-
+getGeoCode :: String -> IO (String,Double,Double)
+getGeoCode raw = do
+    xml <- fetchPage $ "http://maps.googleapis.com/maps/api/geocode/xml?sensor=false&address=" ++ (escapeString okInQuery raw)
+    if (status $ head $ yuuko "//status" xml)
+        then return $ ((head $ yuuko "//result/formatted_address" xml), ((read $ head $ yuuko "//result/geometry/location/lat" xml) :: Double), ((read $ head $ yuuko "//result/geometry/location/lng" xml) :: Double ))
+        else ioError $ userError "Unable to geocode"
+    where
+        status :: String -> Bool
+        status "OK" = True
+        status _ = False
 
 getTitle :: String -> String
 getTitle text = head $ yuuko "//title" text

@@ -81,14 +81,26 @@ fillCLRecord link = do
         , wsuri=""
         }
 
-getAddress :: String -> IO String
-getAddress raw = return $ head $ collectAddresses  $ extractTexts raw
+getAddress :: String -> IO (String,Double,Double)
+getAddress raw = 
+    let linked = getLinkedAddresses raw
+    let found = collectAddresses . extractTexts raw
+    in 
+        if linked != [] 
+        then do
+        else do
     where
-    extractTexts :: String -> [String]
-    extractTexts = (map (\(TagText text) -> text )) . (filter isTagText) . parseTags . head . (yuuko "//body")
+        firstGeo :: [String] -> IO (String,Double,Double)
+        extractTexts :: String -> [String]
+        extractTexts = (map (\(TagText text) -> text )) . (filter isTagText) . parseTags . head . (yuuko "//body")
+            
+--getAddress raw = return $ head $ collectAddresses  $ extractTexts raw
+--    where
+--    extractTexts :: String -> [String]
+--    extractTexts = (map (\(TagText text) -> text )) . (filter isTagText) . parseTags . head . (yuuko "//body")
 
 getLinkedAddresses :: String -> [String]
-getLinkedAddresses = (foldr collapse [] ) (filter wanted) . (map (\x -> parseURI x)) . ( yuuko "//a/@href" )
+getLinkedAddresses = (foldr collapse [] ) . (filter wanted) . (map (\x -> parseURI x)) . ( yuuko "//a/@href" )
     where
         collapse :: String -> [String] -> [String]
         collapse href ads =
@@ -98,7 +110,10 @@ getLinkedAddresses = (foldr collapse [] ) (filter wanted) . (map (\x -> parseURI
                 | otherwise -> getAd ads uri
         wanted :: Maybe URI -> Bool
         wanted Nothing = False
-        wanted Just uri = 
+        wanted Just uri = wantedHosts . uriRegName $ uri
+        wantedHosts :: Maybe String -> Bool
+        wantedHosts Nothing = False
+        wantedHosts Just host = ( host =~ "(?i)(maps.google.com)|(maps.yahoo.com)" :: Bool )
 
 collectAddresses :: [String] -> [String]
 collectAddresses = foldr collect [] 

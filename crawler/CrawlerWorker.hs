@@ -37,13 +37,13 @@ data CrawlerRecord = CrawlerRecord
     { uri :: String
     , title :: String
     , price :: Int
-    , address :: String
-    , lat :: Double
-    , long :: Double
-    , mapuri :: String
-    , walkscore :: Int
-    , transcore :: Int
-    , wsuri :: String
+    , address :: Maybe String
+    , lat :: Maybe Double
+    , long :: Maybe Double
+    , mapuri :: Maybe String
+    , walkscore :: Maybe Int
+    , transcore :: Maybe Int
+    , wsuri :: Maybe String
     } deriving (Show)
 
 
@@ -67,53 +67,90 @@ getCLLinks url = do
 fillCLRecord :: String -> IO CrawlerRecord
 fillCLRecord link = do
     pagetext <- fetchPage link
-    address <- getAddress pagetext
+    (address,lat,lng) <- getAddress pagetext
+    (wsuri, ws, ts) <- getWalkScore (address,lat,lng)
     return CrawlerRecord
         { uri=link
         , title=(getTitle pagetext)
         , price=(getPrice pagetext)
-        , address=""
-        , lat=0
-        , long=0
-        , mapuri=""
-        , walkscore=0
-        , transcore=0
-        , wsuri=""
+        , address=(Just address)
+        , lat=(Just lat)
+        , long=(Just lng)
+        , mapuri=Just ""
+        , walkscore=ws
+        , transcore=ts
+        , wsuri=Just wsuri
         }
+
+getWalkScore :: (String,Double,Double) -> IO (String,Maybe Int,Maybe Int)
+getWalkScore (address,lat,lng) = 
+    let wsuri = "http://www.walkscore.com/score/" ++ (escapeString okInPath (convert address))
+    let wsgeturi = "http://www.walkscore.com/data/get-walkscore.php?" ++ pairsToQuery [("lat", show lat),("lon",show lng)]
+    let tsgeturi = "http://www.walkscore.com/data/get-data.php?" ++ pairsToQuery [("req","ts"),("lat", show lat),("lon",show lng),("city", "San Francisco"),("state", "CA"),("cc", "US")]
+    in do
+    wsjson <- fetchPage wsgeturi
+    tsjson <- fetchPage tsgeturi
+    return ( wsuri,getws html,getts html)
+    where
+        getws :: String -> Maybe Int
+        getws html = 
+            let s = head $ yuuko "//div[@id='your-score']" html
+            in 
+                if (s =~ "^\\d+$" :: Bool )
+                then Just (read s :: Int)
+                else Nothing
+        getts html = 
+            let s = head $ yuuko "//div[@id='your-score']" html
+            in 
+                if (s =~ "^\\d+$" :: Bool )
+                then Just (read s :: Int)
+                else Nothing
+        getPrice text = read $ last $ head $ (( head $ yuuko "//body/h2" text ) =~ "^\\$(\\d+) " :: [[String]] ) :: Int
+        convert :: [Char] -> [Char]
+        convert = map (\x -> swap x)
+        swap :: Char -> Char
+        swap ' ' = '-'
+        swap x = x
 
 getAddress :: String -> IO (String,Double,Double)
 getAddress raw = 
     let linked = getLinkedAddresses raw
-    let found = collectAddresses . extractTexts raw
+        found = collectAddresses . extractTexts $ raw
     in 
-        if linked != [] 
+        if linked == [] 
         then do
+            firstGeo found
         else do
+            (firstGeo linked) `catch` (\e -> firstGeo found )
     where
         firstGeo :: [String] -> IO (String,Double,Double)
+        firstGeo [] = ioError $ userError "unable to geocode any"
+        firstGeo (x:xs) = do
+            (getGeoCode x) `catch` (\e -> firstGeo xs)
         extractTexts :: String -> [String]
         extractTexts = (map (\(TagText text) -> text )) . (filter isTagText) . parseTags . head . (yuuko "//body")
             
---getAddress raw = return $ head $ collectAddresses  $ extractTexts raw
---    where
---    extractTexts :: String -> [String]
---    extractTexts = (map (\(TagText text) -> text )) . (filter isTagText) . parseTags . head . (yuuko "//body")
-
 getLinkedAddresses :: String -> [String]
 getLinkedAddresses = (foldr collapse [] ) . (filter wanted) . (map (\x -> parseURI x)) . ( yuuko "//a/@href" )
     where
-        collapse :: String -> [String] -> [String]
+        collapse :: Maybe URI -> [String] -> [String]
+        collapse Nothing ads = ads
         collapse href ads =
-            let qs = (parseURI href) >>= uriQuery >>= (\x -> return $ queryToPairs x)
-            in
-                | uri == Nothing -> ads
-                | otherwise -> getAd ads uri
+            let qs = href >>= uriQuery >>= (\x -> Just (queryToPairs x))
+            in getAd ads qs
         wanted :: Maybe URI -> Bool
         wanted Nothing = False
-        wanted Just uri = wantedHosts . uriRegName $ uri
+        wanted (Just uri) = wantedHosts . uriRegName $ uri
         wantedHosts :: Maybe String -> Bool
         wantedHosts Nothing = False
-        wantedHosts Just host = ( host =~ "(?i)(maps.google.com)|(maps.yahoo.com)" :: Bool )
+        wantedHosts (Just host) = ( host =~ "(?i)(maps.google.com)|(maps.yahoo.com)" :: Bool )
+        getAd :: [String] -> Maybe [(String,String)] -> [String]
+        getAd ads Nothing = ads
+        getAd ads (Just xs) = (head $ map (\x -> snd x) $ filter adFilter xs):ads
+        adFilter :: (String,String) -> Bool
+        adFilter ("q",_) = True
+        adFilter ("addr",_) = True
+        adFilter _ = False
 
 collectAddresses :: [String] -> [String]
 collectAddresses = foldr collect [] 

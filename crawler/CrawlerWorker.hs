@@ -9,9 +9,11 @@ import Network.HTTP
 import Network.Browser
 import Data.List
 import Text.Regex.PCRE as PCRE
+import Text.URI
 import Text.HTML.Yuuko
 import Text.HTML.TagSoup
-import Text.URI
+import Text.HJson hiding (toString)
+import Text.HJson.Query
 
 data CrawlerContext = CrawlerContext
     { config :: CrawlerConfig
@@ -84,33 +86,46 @@ fillCLRecord link = do
 
 getWalkScore :: (String,Double,Double) -> IO (String,Maybe Int,Maybe Int)
 getWalkScore (address,lat,lng) = 
-    let wsuri = "http://www.walkscore.com/score/" ++ (escapeString okInPath (convert address))
-    let wsgeturi = "http://www.walkscore.com/data/get-walkscore.php?" ++ pairsToQuery [("lat", show lat),("lon",show lng)]
-    let tsgeturi = "http://www.walkscore.com/data/get-data.php?" ++ pairsToQuery [("req","ts"),("lat", show lat),("lon",show lng),("city", "San Francisco"),("state", "CA"),("cc", "US")]
+    let 
+        wsuri = "http://www.walkscore.com/score/" ++ (escapeString okInPath (convert address))
+        wsgeturi = "http://www.walkscore.com/data/get-walkscore.php?" ++ pairsToQuery [("lat", show lat),("lon",show lng)]
+        tsgeturi = "http://www.walkscore.com/data/get-data.php?" ++ pairsToQuery [("req","ts"),("lat", show lat),("lon",show lng),("city", "San Francisco"),("state", "CA"),("cc", "US")]
     in do
+    --html <- fetchPage wsuri
     wsjson <- fetchPage wsgeturi
     tsjson <- fetchPage tsgeturi
-    return ( wsuri,getws html,getts html)
+    return ( wsuri,getws wsjson,getts tsjson )
     where
         getws :: String -> Maybe Int
-        getws html = 
-            let s = head $ yuuko "//div[@id='your-score']" html
-            in 
-                if (s =~ "^\\d+$" :: Bool )
-                then Just (read s :: Int)
-                else Nothing
-        getts html = 
-            let s = head $ yuuko "//div[@id='your-score']" html
-            in 
-                if (s =~ "^\\d+$" :: Bool )
-                then Just (read s :: Int)
-                else Nothing
+        getws json = 
+            let
+                jObj = jParse json
+            in
+                case ( (getFromKey "walkscore") >>> isNum $ jObj) of
+                    [(JNumber x):_] -> Just (ceiling x)
+                    _ -> Nothing
+        getts :: String -> Maybe Int
+        getts json = 
+            let 
+                jObj = jParse json
+            in
+                case ( (getFromKey "ts") >>> (getFromKey "transit_score") >>> isNum $ jObj) of
+                    [(JNumber x):_] -> Just (ceiling x)
+                    _ -> Nothing
         getPrice text = read $ last $ head $ (( head $ yuuko "//body/h2" text ) =~ "^\\$(\\d+) " :: [[String]] ) :: Int
         convert :: [Char] -> [Char]
-        convert = map (\x -> swap x)
+        convert = (map swap) . unwords . (map swapWord) . words
+        swapWord :: String -> String
+        swapWord "&" = "and"
+        swapWord x = x
         swap :: Char -> Char
         swap ' ' = '-'
         swap x = x
+
+jParse :: String -> Json
+jParse json = case (fromString json) of
+    Left l -> jEmpty
+    Right j -> j
 
 getAddress :: String -> IO (String,Double,Double)
 getAddress raw = 

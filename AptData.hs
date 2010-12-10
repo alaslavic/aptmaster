@@ -10,6 +10,9 @@ module AptData
 , aptWalkscore
 , aptTranscore
 , aptWsuri
+, AptConnection(AptConnection)
+, aptDB
+, aptConnect
 )
 where
 
@@ -31,17 +34,34 @@ data AptRecord = AptRecord
     } deriving (Show)
 
 data AptConnection = AptConnection
-{ aptDB = Connection
-}
+    { aptDB :: Connection
+    }
 
 type AptDBUser = String
 type AptDBPw = String
 type AptDBType = String
 type AptDBHost = String
 
-aptConnect :: AptDBHost -> AptDBUser -> AptDBPw -> AptDBType -> AptConnection
+aptConnect :: AptDBHost -> AptDBUser -> AptDBPw -> AptDBType -> IO AptConnection
 aptConnect host user pass typ =
     case (typ) of
         "sqlite" -> do
             conn <- connectSqlite3 host
+            valid <- aptValidateDB conn
+            case (valid) of 
+                True -> makeAptConnection conn
+                False -> ioError $ userError $ "unable to validate connection"
         _ -> ioError $ userError $ "unsupported db type '" ++ typ ++ "'"
+
+makeAptConnection :: Connection -> IO AptConnection
+makeAptConnection c = do
+    return AptConnection {
+          aptDB=c
+        }
+
+aptValidateDB :: Connection -> IO Bool
+aptValidateDB conn = do 
+    getvsn <- (prepare conn "select version from schema_version") `catch` (\e -> return . aptValidateDB . makeDB conn)
+    execute getvsn
+    rslt <- fetchAllRows' getvsn
+    case (head . head $ rslt) of

@@ -3,6 +3,8 @@ module CrawlerWorker
 )
 where
 
+import AptData
+
 import Database.HDBC.Sqlite3 as DB
 import Network
 import Network.HTTP
@@ -14,11 +16,6 @@ import Text.HTML.Yuuko
 import Text.HTML.TagSoup
 import Text.HJson hiding (toString)
 import Text.HJson.Query
-
-data CrawlerContext = CrawlerContext
-    { config :: CrawlerConfig
-    , db :: DB.Connection
-    }
 
 data CrawlerConfig = CrawlerConfig
     { gAPI :: String
@@ -33,19 +30,6 @@ data CrawlerReport = CrawlerReport
     , new :: Int
     , updated :: Int
     , errors :: [String]
-    } deriving (Show)
-
-data CrawlerRecord = CrawlerRecord
-    { uri :: String
-    , title :: String
-    , price :: Int
-    , address :: Maybe String
-    , lat :: Maybe Double
-    , long :: Maybe Double
-    , mapuri :: Maybe String
-    , walkscore :: Maybe Int
-    , transcore :: Maybe Int
-    , wsuri :: Maybe String
     } deriving (Show)
 
 
@@ -66,22 +50,22 @@ getCLLinks url = do
         matchlink = match ( makeRegexOpts defaultCompOpt defaultExecOpt "/\\d+\\.html$" :: Regex )
 
 
-fillCLRecord :: String -> IO CrawlerRecord
+fillCLRecord :: String -> IO AptRecord
 fillCLRecord link = do
     pagetext <- fetchPage link
     (address,lat,lng) <- getAddress pagetext
     (wsuri, ws, ts) <- getWalkScore (address,lat,lng)
-    return CrawlerRecord
-        { uri=link
-        , title=(getTitle pagetext)
-        , price=(getPrice pagetext)
-        , address=(Just address)
-        , lat=(Just lat)
-        , long=(Just lng)
-        , mapuri=Just ""
-        , walkscore=ws
-        , transcore=ts
-        , wsuri=Just wsuri
+    return AptRecord
+        { aptUri=link
+        , aptTitle=(getTitle pagetext)
+        , aptPrice=(getPrice pagetext)
+        , aptAddress=(Just address)
+        , aptLat=(Just lat)
+        , aptLong=(Just lng)
+        , aptMapuri=Just ""
+        , aptWalkscore=ws
+        , aptTranscore=ts
+        , aptWsuri=Just wsuri
         }
 
 getWalkScore :: (String,Double,Double) -> IO (String,Maybe Int,Maybe Int)
@@ -102,7 +86,7 @@ getWalkScore (address,lat,lng) =
                 jObj = jParse json
             in
                 case ( (getFromKey "walkscore") >>> isNum $ jObj) of
-                    [(JNumber x):_] -> Just (ceiling x)
+                    ((JNumber x):_) -> Just (ceiling x)
                     _ -> Nothing
         getts :: String -> Maybe Int
         getts json = 
@@ -110,7 +94,7 @@ getWalkScore (address,lat,lng) =
                 jObj = jParse json
             in
                 case ( (getFromKey "ts") >>> (getFromKey "transit_score") >>> isNum $ jObj) of
-                    [(JNumber x):_] -> Just (ceiling x)
+                    ((JNumber x):_) -> Just (ceiling x)
                     _ -> Nothing
         getPrice text = read $ last $ head $ (( head $ yuuko "//body/h2" text ) =~ "^\\$(\\d+) " :: [[String]] ) :: Int
         convert :: [Char] -> [Char]

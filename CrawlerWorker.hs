@@ -53,13 +53,15 @@ getCLLinks url = do
 fillCLRecord :: String -> IO AptRecord
 fillCLRecord link = do
     pagetext <- fetchPage link
+    let (title,hood,price) = getParts pagetext
     (address,lat,lng) <- getAddress pagetext
     (wsuri, ws, ts) <- getWalkScore (address,lat,lng)
     return AptRecord
         { aptUri=link
-        , aptTitle=(getTitle pagetext)
-        , aptPrice=(getPrice pagetext)
+        , aptTitle=title
+        , aptPrice=price
         , aptAddress=(Just address)
+        , aptNeighborhood=Just hood
         , aptLat=(Just lat)
         , aptLong=(Just lng)
         , aptMapuri=Just ""
@@ -96,7 +98,6 @@ getWalkScore (address,lat,lng) =
                 case ( (getFromKey "ts") >>> (getFromKey "transit_score") >>> isNum $ jObj) of
                     ((JNumber x):_) -> Just (ceiling x)
                     _ -> Nothing
-        getPrice text = read $ last $ head $ (( head $ yuuko "//body/h2" text ) =~ "^\\$(\\d+) " :: [[String]] ) :: Int
         convert :: [Char] -> [Char]
         convert = (map swap) . unwords . (map swapWord) . words
         swapWord :: String -> String
@@ -168,8 +169,21 @@ getGeoCode raw = do
         status "OK" = True
         status _ = False
 
-getTitle :: String -> String
-getTitle text = head $ yuuko "//title" text
+--getTitle :: String -> String
+--getTitle text = head $ yuuko "//title" text
 
-getPrice :: String -> Int
-getPrice text = read $ last $ head $ (( head $ yuuko "//body/h2" text ) =~ "^\\$(\\d+) " :: [[String]] ) :: Int
+--getPrice :: String -> Int
+--getPrice text = read $ last $ head $ (( head $ yuuko "//body/h2" text ) =~ "^\\$(\\d+) " :: [[String]] ) :: Int
+
+getParts :: String -> (String, String, Int)
+getParts t = 
+    let
+        title = head $ yuuko "//title" t
+        h2 = head $ yuuko "//body/h2" t
+        m = drop 1 $ head (h2 =~ "^\\$(\\d+) .*\\((.*)\\)$" :: [[String]])
+    in
+        ( title,
+          (last m),
+          ((read $ head m) :: Int)
+        )
+

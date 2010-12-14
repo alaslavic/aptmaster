@@ -1,5 +1,14 @@
 module CrawlerWorker
 ( getConfig
+, getCLLinks
+, fetchPage
+, fillCLRecord
+, CrawlerConfig(CrawlerConfig)
+, gAPI
+, dbtype
+, dbhost
+, dbuser
+, dbpass
 )
 where
 
@@ -52,35 +61,36 @@ getCLLinks url = do
 
 fillCLRecord :: String -> IO AptRecord
 fillCLRecord link = do
+    let id = read $ last $ head ( link =~ "(\\d+)\\.html$" :: [[String]] ) ::Int
     pagetext <- fetchPage link
     let (title,hood,price) = getParts pagetext
     (address,lat,lng) <- getAddress pagetext
     (wsuri, ws, ts) <- getWalkScore (address,lat,lng)
     return AptRecord
-        { aptUri=link
+        { aptId=id
+        , aptUri=link
         , aptTitle=title
         , aptPrice=price
-        , aptAddress=(Just address)
+        , aptAddress=address
         , aptNeighborhood=Just hood
-        , aptLat=(Just lat)
-        , aptLong=(Just lng)
+        , aptLat=lat
+        , aptLong=lng
         , aptMapuri=Just ""
         , aptWalkscore=ws
         , aptTranscore=ts
-        , aptWsuri=Just wsuri
+        , aptWsuri=wsuri
         }
-
-getWalkScore :: (String,Double,Double) -> IO (String,Maybe Int,Maybe Int)
-getWalkScore (address,lat,lng) = 
+ 
+getWalkScore :: (Maybe String,Maybe Double,Maybe Double) -> IO (Maybe String,Maybe Int,Maybe Int)
+getWalkScore (Just address,Just lat,Just lng) = 
     let 
         wsuri = "http://www.walkscore.com/score/" ++ (escapeString okInPath (convert address))
         wsgeturi = "http://www.walkscore.com/data/get-walkscore.php?" ++ pairsToQuery [("lat", show lat),("lon",show lng)]
         tsgeturi = "http://www.walkscore.com/data/get-data.php?" ++ pairsToQuery [("req","ts"),("lat", show lat),("lon",show lng),("city", "San Francisco"),("state", "CA"),("cc", "US")]
     in do
-    --html <- fetchPage wsuri
     wsjson <- fetchPage wsgeturi
     tsjson <- fetchPage tsgeturi
-    return ( wsuri,getws wsjson,getts tsjson )
+    return ( Just wsuri,getws wsjson,getts tsjson )
     where
         getws :: String -> Maybe Int
         getws json = 
@@ -106,24 +116,25 @@ getWalkScore (address,lat,lng) =
         swap :: Char -> Char
         swap ' ' = '-'
         swap x = x
+getWalkScore x = return (Nothing,Nothing,Nothing)
 
 jParse :: String -> Json
 jParse json = case (fromString json) of
     Left l -> jEmpty
     Right j -> j
 
-getAddress :: String -> IO (String,Double,Double)
+getAddress :: String -> IO (Maybe String,Maybe Double,Maybe Double)
 getAddress raw = 
     let linked = getLinkedAddresses raw
         found = collectAddresses . extractTexts $ raw
     in 
         if linked == [] 
         then do
-            firstGeo found
+            firstGeo found `catch` (\e -> return (Nothing, Nothing, Nothing))
         else do
-            (firstGeo linked) `catch` (\e -> firstGeo found )
+            ((firstGeo linked) `catch` (\e -> firstGeo found )) `catch` (\e -> return (Nothing, Nothing, Nothing) )
     where
-        firstGeo :: [String] -> IO (String,Double,Double)
+        firstGeo :: [String] -> IO (Maybe String,Maybe Double,Maybe Double)
         firstGeo [] = ioError $ userError "unable to geocode any"
         firstGeo (x:xs) = do
             (getGeoCode x) `catch` (\e -> firstGeo xs)
@@ -158,12 +169,12 @@ collectAddresses = foldr collect []
     collect :: String -> [String] -> [String]
     collect consider ps = ps
 
-getGeoCode :: String -> IO (String,Double,Double)
+getGeoCode :: String -> IO (Maybe String,Maybe Double,Maybe Double)
 getGeoCode raw = do
     xml <- fetchPage $ "http://maps.googleapis.com/maps/api/geocode/xml?sensor=false&address=" ++ (escapeString okInQuery raw)
-    if (status $ head $ yuuko "//status" xml)
-        then return $ ((head $ yuuko "//result/formatted_address" xml), ((read $ head $ yuuko "//result/geometry/location/lat" xml) :: Double), ((read $ head $ yuuko "//result/geometry/location/lng" xml) :: Double ))
-        else ioError $ userError "Unable to geocode"
+    case (head $ yuuko "//status" xml) of
+        "OK" -> return $ (Just (head $ yuuko "//result/formatted_address" xml), (Just (read $ head $ yuuko "//result/geometry/location/lat" xml) :: Maybe Double), (Just (read $ head $ yuuko "//result/geometry/location/lng" xml) :: Maybe Double ))
+        _ -> ioError $ userError "Unable to geocode"
     where
         status :: String -> Bool
         status "OK" = True
@@ -180,7 +191,7 @@ getParts t =
     let
         title = head $ yuuko "//title" t
         h2 = head $ yuuko "//body/h2" t
-        m = drop 1 $ head (h2 =~ "^\\$(\\d+) .*\\((.*)\\)$" :: [[String]])
+        m = drop 1 $ head (h2 =~ "^\\$?(\\d+)?.*?\\(([^\\)]*)\\)" :: [[String]])
     in
         ( title,
           (last m),

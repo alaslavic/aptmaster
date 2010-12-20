@@ -63,23 +63,28 @@ fillCLRecord :: String -> IO AptRecord
 fillCLRecord link = do
     let id = read $ last $ head ( link =~ "(\\d+)\\.html$" :: [[String]] ) ::Int
     pagetext <- fetchPage link
-    let (title,hood,price) = getParts pagetext
+    let (title,hood,price) = case (getParts pagetext) of
+            Nothing -> ("","",0)
+            (Just (x,y,z)) -> (x,y,z)
     (address,lat,lng) <- getAddress pagetext
     (wsuri, ws, ts) <- getWalkScore (address,lat,lng)
-    return AptRecord
-        { aptId=id
-        , aptUri=link
-        , aptTitle=title
-        , aptPrice=price
-        , aptAddress=address
-        , aptNeighborhood=Just hood
-        , aptLat=lat
-        , aptLong=lng
-        , aptMapuri=Just ""
-        , aptWalkscore=ws
-        , aptTranscore=ts
-        , aptWsuri=wsuri
-        }
+    case title of
+        "" -> ioError $ userError $ "unable to fill record for: " ++ link
+        _ -> 
+            return AptRecord
+                { aptId=id
+                , aptUri=link
+                , aptTitle=title
+                , aptPrice=price
+                , aptAddress=address
+                , aptNeighborhood=Just hood
+                , aptLat=lat
+                , aptLong=lng
+                , aptMapuri=Just ""
+                , aptWalkscore=ws
+                , aptTranscore=ts
+                , aptWsuri=wsuri
+                }
  
 getWalkScore :: (Maybe String,Maybe Double,Maybe Double) -> IO (Maybe String,Maybe Int,Maybe Int)
 getWalkScore (Just address,Just lat,Just lng) = 
@@ -186,15 +191,18 @@ getGeoCode raw = do
 --getPrice :: String -> Int
 --getPrice text = read $ last $ head $ (( head $ yuuko "//body/h2" text ) =~ "^\\$(\\d+) " :: [[String]] ) :: Int
 
-getParts :: String -> (String, String, Int)
+getParts :: String -> Maybe (String, String, Int)
 getParts t = 
     let
         title = head $ yuuko "//title" t
         h2 = head $ yuuko "//body/h2" t
-        m = drop 1 $ head (h2 =~ "^\\$?(\\d+)?.*?\\(([^\\)]*)\\)" :: [[String]])
+        m = drop 1 $ head (h2 =~ "^\\$?(\\d+)?.*?(?:\\(([^\\)]*)\\))?" :: [[String]])
     in
-        ( title,
-          (last m),
-          ((read $ head m) :: Int)
-        )
+        case title of
+            "" -> Nothing
+            _ -> 
+                Just ( title,
+                  (last m),
+                  ((read $ head m) :: Int)
+                )
 

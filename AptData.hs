@@ -26,6 +26,9 @@ module AptData
 , aptPut
 , aptPutCommit
 , aptQuery
+, aptPoiPut
+, aptPoiPutCommit
+, aptPoiTypeQuery
 )
 where
 
@@ -115,6 +118,38 @@ sqlToAptPoi [id,typ,add,lat,lng] = AptPoi
     , aptPoiLong=(fromSql lng)
     }
 
+aptPoiTypeQuery :: Connection -> IO [String]
+aptPoiTypeQuery conn = do
+    stmt <- prepare conn "select distinct type from poi order by type asc"
+    rslt <- execute stmt []
+    rows <- fetchAllRows' stmt
+    return $ map (\r -> fromSql (head r) :: String ) rows
+
+aptPoiPut :: Connection -> AptPoi -> IO Bool
+aptPoiPut conn rec = do
+    stmt <- prepare conn "insert into poi( type, address, lat, lng ) values (?,?,?,?)"
+    rslt <- execute stmt $ aptPoiToSql rec
+    case rslt of 
+        1 -> return True
+        _ -> return False
+
+aptPoiPutCommit :: AptPoi -> IO Bool
+aptPoiPutCommit conn rec = do
+    r <- aptPoiPut conn rec
+    commit conn
+    return r
+
+aptQueryComplex :: Connection -> [String] -> [String] -> IO [AptRecord]
+aptQueryComplex conn types order = do
+    let
+        op = "select"
+        fields = ["apt.id", "apt.uri", "apt.title", "apt.price", "apt.address", "apt.neighborhood", "apt.lat", "apt.lng", "apt.mapuri", "apt.ws", "apt.ts", "apt.wsuri" ]
+        from = ["apt"]
+    in do
+        stmt <- prepare conn makeStmt
+    where
+        makeStmt :: [String] -> [String] -> String
+        makeStmt
 
 aptQuery :: Connection -> Int -> IO [AptRecord]
 aptQuery conn page = do

@@ -67,18 +67,24 @@ resultsHandlerJson = do
             , "wsuri" ]
         values :: AptRecord -> [Json]
         values rec =
-            [ JNumber $  aptId rec
+            [ JNumber $ toRational $ aptId rec
             , JString $  aptUri rec
             , JString $  aptTitle rec
-            , JNumber $  aptPrice rec
-            , JString $  aptAddress rec
-            , JString $  aptNeighborhood rec
-            , JNumber $ toRational $  aptLat rec
-            , JNumber $ toRational $ aptLong rec
-            , JString $  aptMapuri rec
-            , JNumber $  aptWalkscore rec
-            , JNumber $  aptTranscore rec
-            , JString $  aptWsuri rec ]
+            , JNumber $  toRational $ aptPrice rec
+            , jStringOrNull $  aptAddress rec
+            , jStringOrNull $  aptNeighborhood rec
+            , jNumOrNull $  aptLat rec
+            , jNumOrNull $ aptLong rec
+            , jStringOrNull $  aptMapuri rec
+            , jNumOrNull $ aptWalkscore rec
+            , jNumOrNull $ aptTranscore rec
+            , jStringOrNull $  aptWsuri rec ]
+        jStringOrNull :: Maybe String -> Json
+        jStringOrNull (Just s) = JString s
+        jStringOrNull Nothing = JNull
+        jNumOrNull :: ( Num a, Real a ) => Maybe a -> Json
+        jNumOrNull Nothing = JNull
+        jNumOrNull (Just n) = JNumber $ toRational n
 
 resultsSplice :: Splice Snap
 resultsSplice = do

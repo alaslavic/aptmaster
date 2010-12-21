@@ -133,23 +133,29 @@ aptPoiPut conn rec = do
         1 -> return True
         _ -> return False
 
-aptPoiPutCommit :: AptPoi -> IO Bool
+aptPoiPutCommit :: Connection -> AptPoi -> IO Bool
 aptPoiPutCommit conn rec = do
     r <- aptPoiPut conn rec
     commit conn
     return r
 
-aptQueryComplex :: Connection -> [String] -> [String] -> IO [AptRecord]
-aptQueryComplex conn types order = do
-    let
-        op = "select"
-        fields = ["apt.id", "apt.uri", "apt.title", "apt.price", "apt.address", "apt.neighborhood", "apt.lat", "apt.lng", "apt.mapuri", "apt.ws", "apt.ts", "apt.wsuri" ]
-        from = ["apt"]
-    in do
-        stmt <- prepare conn makeStmt
-    where
-        makeStmt :: [String] -> [String] -> String
-        makeStmt
+-- aptQueryComplex :: Connection -> [String] -> [String] Int -> IO [AptRecord]
+-- aptQueryComplex conn types o page =
+--     let
+--         op = "select"
+--         (fields,from,order) = checkOrder o 
+--     in do
+--         stmt <- prepare conn makeStmt op fields from types order
+--     where
+--         checkOrder :: [String] -> ([String],[String],String)
+--         checkOrder os = foldr doOrder (defFields,["apt"],[]) os
+--         doOrder :: String -> ([String],[String],[String]) -> ([String],[String],[String])
+--         doOrder s (fields,from,order) = case s of
+--             _ -> (fields,from,order)
+--         defFields :: [String]
+--         defFields = ["apt.id", "apt.uri", "apt.title", "apt.price", "apt.address", "apt.neighborhood", "apt.lat", "apt.lng", "apt.mapuri", "apt.ws", "apt.ts", "apt.wsuri" ]
+--         makeStmt :: String -> [String] -> [String] -> [String] -> [String] -> Int -> String
+--         makeStmt op fields from types order page = concat [op, " from ", 
 
 aptQuery :: Connection -> Int -> IO [AptRecord]
 aptQuery conn page = do

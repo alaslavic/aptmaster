@@ -125,7 +125,7 @@ getWalkScore x = return (Nothing,Nothing,Nothing)
 
 jParse :: String -> Json
 jParse json = case (fromString json) of
-    Left l -> jEmpty
+    Left l -> JNull
     Right j -> j
 
 getAddress :: String -> IO (Maybe String,Maybe Double,Maybe Double)

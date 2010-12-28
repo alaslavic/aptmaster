@@ -1,14 +1,12 @@
 module CrawlerWorker
-( getConfig
-, getCLLinks
+( getCLLinks
 , fetchPage
 , fillCLRecord
-, CrawlerConfig(CrawlerConfig)
-, gAPI
-, dbtype
-, dbhost
-, dbuser
-, dbpass
+, linkId
+, poiCalc
+, crawl
+, CrawlerConfig
+, debug
 )
 where
 
@@ -25,26 +23,57 @@ import Text.HTML.Yuuko
 import Text.HTML.TagSoup
 import Text.HJson hiding (toString)
 import Text.HJson.Query
-
-data CrawlerConfig = CrawlerConfig
-    { gAPI :: String
-    , dbtype :: String
-    , dbhost :: String
-    , dbuser :: String
-    , dbpass :: String
-    } deriving (Show)
-
-data CrawlerReport = CrawlerReport
-    { status :: String
-    , new :: Int
-    , updated :: Int
-    , errors :: [String]
-    } deriving (Show)
+import System.Console.GetOpt
+import qualified Data.Map as Map
+import System (getArgs)
+import Data.Maybe
 
 
-getConfig :: String -> IO CrawlerConfig
+type CrawlerConfig = Map.Map String String
 
-getConfig _ = return CrawlerConfig{ gAPI = "", dbtype = "sqlite", dbhost = "./crawler.db", dbuser = "", dbpass = "" }
+debug :: CrawlerConfig -> String -> IO ()
+debug config message = do
+    case (Map.member "verbose" config) of
+        True -> putStrLn message
+        False -> return ()
+
+crawl :: IO [(String, IO Bool)]
+crawl config = do
+    let d = debug config
+    d $ show config
+    let host = Map.findWithDefault "localhost" "dbhost" config
+    let user = Map.findWithDefault "" "dbuser" config
+    let pass = Map.findWithDefault "" "dbpass" config
+    let typ = Map.findWithDefault "mysql" "dbtype" config
+    conn <- aptConnect host user pass typ
+    poi <- aptPoiQuery conn
+    d $ show poi
+    links <- getCLLinks $ Map.findWithDefault "http://sfbay.craigslist.org/sfc/apa/" "clpage" config
+    d $ show links
+    exist <- sequence $ map (\l -> aptExists conn $ linkId l) links
+    let bools = map not exist
+    d $ show bools 
+    let wanted = map (\x -> fst x ) $ filter (\x -> snd x ) $ zip links bools
+    let filled = map (\link -> fillCLRecord link) wanted
+    let poied = map (\apt -> (return . (poiCalc poi)) =<< apt ) filled
+    let inserted = map (\apt -> (aptPutCommit conn) =<< apt ) poied
+    return $ zip wante inserted
+
+addPoi :: String -> IO AptPoi
+addPoi config typ addstr = do
+    let d = debug config
+    d $ show config
+    let host = Map.findWithDefault "localhost" "dbhost" config
+    let user = Map.findWithDefault "" "dbuser" config
+    let pass = Map.findWithDefault "" "dbpass" config
+    let typ = Map.findWithDefault "mysql" "dbtype" config
+    conn <- aptConnect host user pass typ
+    (address, lat, lng) <- getGeoCode addstr
+    geocode <- getGeoCode addstr
+    case geocode of
+        (Nothing,Nothing,Nothing) -> ioError $ userError "unable to geocode"
+        (Just address, Just lat, Just lng) -> 
+            let rec = AptPoi{ aptPoiType=typ, aptPoiAddress=address, aptPoiLat=lat, aptPoiLong=lng, aptPoiId 0 }
 
 fetchPage :: String -> IO String
 fetchPage url = do
@@ -58,10 +87,13 @@ getCLLinks url = do
     where 
         matchlink = match ( makeRegexOpts defaultCompOpt defaultExecOpt "/\\d+\\.html$" :: Regex )
 
+linkId :: String -> Int
+linkId link = read $ last $ head ( link =~ "(\\d+)\\.html$" :: [[String]] ) ::Int
+
 
 fillCLRecord :: String -> IO AptRecord
 fillCLRecord link = do
-    let id = read $ last $ head ( link =~ "(\\d+)\\.html$" :: [[String]] ) ::Int
+    let id = linkId link 
     pagetext <- fetchPage link
     let (title,hood,price) = case (getParts pagetext) of
             Nothing -> ("","",0)
@@ -84,6 +116,7 @@ fillCLRecord link = do
                 , aptWalkscore=ws
                 , aptTranscore=ts
                 , aptWsuri=wsuri
+                , aptPois=[]
                 }
  
 getWalkScore :: (Maybe String,Maybe Double,Maybe Double) -> IO (Maybe String,Maybe Int,Maybe Int)
@@ -127,6 +160,27 @@ jParse :: String -> Json
 jParse json = case (fromString json) of
     Left l -> JNull
     Right j -> j
+
+poiCalc :: [AptPoi] -> AptRecord -> AptRecord
+poiCalc ps r = case ( aptLat r, aptLong r ) of 
+    (Nothing,Nothing) -> r
+    (Just lat, Just lng) -> r { aptPois=( map (\p -> (p, haversine lat lng (aptPoiLat p) (aptPoiLong p)  ) ) ) ps }
+
+haversine :: Double -> Double -> Double -> Double -> Double
+haversine lat1 lng1 lat2 lng2 = 
+    let
+        lat1' = pi * (lat1 / 180)
+        lng1' = pi * (lng1 / 180)
+        lat2' = pi * (lat2 / 180)
+        lng2' = pi * (lng2 / 180)
+        dlat = lat2' - lat1'
+        dlng = lng2' - lng1'
+        a = ((sin (dlat/2))^2) + ((cos lat1') * (cos lat2') * ((sin (dlng/2) )^2) )
+        c = 2 * (atan2 ( sqrt a ) ( sqrt 1/a ) )
+    in
+        r * c
+    where 
+        r = 3956.6
 
 getAddress :: String -> IO (Maybe String,Maybe Double,Maybe Double)
 getAddress raw = 

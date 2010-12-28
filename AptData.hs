@@ -12,6 +12,7 @@ module AptData
 , aptWalkscore
 , aptTranscore
 , aptWsuri
+, aptPois
 , AptPoi(AptPoi)
 , aptPoiId
 , aptPoiType
@@ -25,9 +26,11 @@ module AptData
 , sqlToAptRec
 , aptPut
 , aptPutCommit
+, aptExists
 , aptQuery
 , aptPoiPut
 , aptPoiPutCommit
+, aptPoiQuery
 , aptPoiTypeQuery
 )
 where
@@ -35,6 +38,8 @@ where
 import Database.HDBC
 import Database.HDBC.Sqlite3
 import Data.List
+import Data.Map as Map
+import Control.Monad 
 
 data AptRecord = AptRecord
     { aptId :: Int
@@ -49,14 +54,15 @@ data AptRecord = AptRecord
     , aptWalkscore :: Maybe Int
     , aptTranscore :: Maybe Int
     , aptWsuri :: Maybe String
+    , aptPois :: [(AptPoi,Double)]
     } deriving (Show)
 
 data AptPoi = AptPoi
     { aptPoiId :: Int
     , aptPoiType :: String
-    , aptPoiAddress :: Maybe String
-    , aptPoiLat :: Maybe Double
-    , aptPoiLong :: Maybe Double
+    , aptPoiAddress :: String
+    , aptPoiLat :: Double
+    , aptPoiLong :: Double
     } deriving (Show)
 
 data AptConnection = AptConnection
@@ -86,8 +92,7 @@ aptRecToSql rec =
 
 aptPoiToSql :: AptPoi -> [SqlValue]
 aptPoiToSql rec = 
-    [toSql $ aptPoiId rec
-    ,toSql $ aptPoiType rec
+    [toSql $ aptPoiType rec
     ,toSql $ aptPoiAddress rec
     ,toSql $ aptPoiLat rec
     ,toSql $ aptPoiLong rec
@@ -107,6 +112,7 @@ sqlToAptRec [id,uri,tit,pri,add,nei,lat,lng,mu,ws,ts,wsu] = AptRecord
     , aptWalkscore=(fromSql ws)
     , aptTranscore=(fromSql ts)
     , aptWsuri=(fromSql wsu)
+    , aptPois=[]
     }
 
 sqlToAptPoi :: [SqlValue] -> AptPoi
@@ -118,12 +124,34 @@ sqlToAptPoi [id,typ,add,lat,lng] = AptPoi
     , aptPoiLong=(fromSql lng)
     }
 
+type AptPoiMap = Map String [AptPoi]
+
+type Where = [(String,Ordering,String)]
+
+aptPoiQuery :: Connection -> Where -> IO [AptPoi]
+aptPoiQuery conn wh = do
+    let q = "select * from poi"
+    let wc = foldl fwc "" wh
+    stmt <- prepare conn "select * from poi order by type"
+    execute stmt []
+    rows <- fetchAllRows' stmt
+    return $ Data.List.map sqlToAptPoi rows
+    where
+        fwc :: String -> (String,String,String) -> String
+        fwc c ("address",o,kkk = c
+
+ 
+aptPoiQueryMap :: Connection -> IO AptPoiMap
+aptPoiQueryMap conn = do
+    ps <- aptPoiQuery conn
+    return $ foldr (\ p map -> insertWith' (\ new old -> (head new):old ) (aptPoiType p) [p] map ) Map.empty ps
+
 aptPoiTypeQuery :: Connection -> IO [String]
 aptPoiTypeQuery conn = do
     stmt <- prepare conn "select distinct type from poi order by type asc"
     rslt <- execute stmt []
     rows <- fetchAllRows' stmt
-    return $ map (\r -> fromSql (head r) :: String ) rows
+    return $ Data.List.map (\r -> fromSql (head r) :: String ) rows
 
 aptPoiPut :: Connection -> AptPoi -> IO Bool
 aptPoiPut conn rec = do
@@ -139,29 +167,31 @@ aptPoiPutCommit conn rec = do
     commit conn
     return r
 
--- aptQueryComplex :: Connection -> [String] -> [String] Int -> IO [AptRecord]
--- aptQueryComplex conn types o page =
---     let
---         op = "select"
---         (fields,from,order) = checkOrder o 
---     in do
---         stmt <- prepare conn makeStmt op fields from types order
---     where
---         checkOrder :: [String] -> ([String],[String],String)
---         checkOrder os = foldr doOrder (defFields,["apt"],[]) os
---         doOrder :: String -> ([String],[String],[String]) -> ([String],[String],[String])
---         doOrder s (fields,from,order) = case s of
---             _ -> (fields,from,order)
---         defFields :: [String]
---         defFields = ["apt.id", "apt.uri", "apt.title", "apt.price", "apt.address", "apt.neighborhood", "apt.lat", "apt.lng", "apt.mapuri", "apt.ws", "apt.ts", "apt.wsuri" ]
---         makeStmt :: String -> [String] -> [String] -> [String] -> [String] -> Int -> String
---         makeStmt op fields from types order page = concat [op, " from ", 
+aptPoiAssoc :: Connection -> AptRecord -> (AptPoi,Double) -> IO Bool
+aptPoiAssoc conn rec (poi,d) = do
+    stmt <- prepare conn "insert or replace into apt_poi(aptid, poiid, type,dist) values(?,?,?,?)"
+    rslt <- execute stmt [toSql $ aptId rec, toSql $ aptPoiId poi, toSql $ aptPoiType poi, toSql d]
+    return $ case rslt of 
+        1 -> True
+        _ -> False
+
+-- example query
+--select apt.id, foo.dist, bar.dist, poi.type, apt_poi.dist from apt join apt_poi as foo on apt.id = foo.aptid and foo.type = "foo" join apt_poi as bar on apt.id = bar.aptid and bar.type = "bar" join apt_poi on apt.id = apt_poi.aptid join poi on apt_poi.poiid = poi.id order by foo.dist, bar.dist;
+
+aptExists :: Connection -> Int -> IO Bool
+aptExists conn id = do
+    stmt <- prepare conn "select count(id) from apt where id = ?"
+    rslt <- execute stmt [toSql id]
+    rows <- fetchAllRows' stmt
+    return $ case (fromSql . head . head $ rows :: Int) of
+        1 -> True
+        _ -> False
 
 aptQuery :: Connection -> Int -> IO [AptRecord]
 aptQuery conn page = do
     stmt <- prepare conn "select \
-\apt.id, apt.uri, apt.title,apt.price,apt.address,apt.neighborhood,apt.lat,apt.lng,apt.mapuri,apt.ws,apt.ts,apt.wsuri \
-\from apt \
+\apt.id, apt.uri, apt.title,apt.price,apt.address,apt.neighborhood,apt.lat,apt.lng,apt.mapuri,apt.ws,apt.ts,apt.wsuri, poi.id, poi.type, poi.address, poi.lat, poi.lng, apt_poi.dist \
+\from apt join apt_poi on apt.id = apt_poi.aptid jion poi on poi apt_poi.poiid  \
 \order by apt.price \
 \limit ? offset ?"
     rslt <- execute stmt 
@@ -169,7 +199,23 @@ aptQuery conn page = do
         (toSql (50 :: Integer)), (toSql (50 * (page-1))) 
         ]
     rows <- fetchAllRows' stmt
-    return $ map sqlToAptRec rows
+    --return $ Data.List.map sqlToAptRec rows
+    return $ reverse $ snd $ foldr collapse (Nothing,[]) rows
+    where
+        collapse :: [SqlValue] -> (Maybe AptRecord,[AptRecord]) -> (Maybe AptRecord,[AptRecord])
+        collapse row (current,rs) = 
+            let
+                (recf,poid) = splitAt 11 row
+                (poif,ds) = splitAt 5 poid
+                d = (fromSql $ head ds) :: Double
+                rec = sqlToAptRec recf
+                poi = sqlToAptPoi poif
+            --in (Just ((sqlToAptRec recf){aptPois=[sqlToAptPoi), rs)
+            in case current of 
+                Nothing -> ( Just rec{ aptPois=[(poi,d)] }, rs )
+                Just c -> if ((aptId c) == (aptId rec))
+                    then ( Just c{ aptPois=((poi,d):(aptPois c)) }, rs )
+                    else ( Just rec{ aptPois=[(poi,d)] }, (c{aptPois=(reverse $ aptPois c)}):rs )
 
 aptPutCommit :: Connection -> AptRecord -> IO Bool
 aptPutCommit conn rec = do
@@ -182,6 +228,7 @@ aptPut conn rec = do
     stmt <- prepare conn "insert or replace into apt(id, uri,title,price,address,neighborhood,lat,lng,mapuri,ws,ts,wsuri) values ( ?,?,?,?,?,?,?,?,?,?,?,? )"
     rslt <- execute stmt $ aptRecToSql rec
     finish stmt
+    rslts <- mapM (aptPoiAssoc conn rec) $ aptPois rec
     case rslt of
         1 -> return True
         _ -> return False
@@ -211,5 +258,7 @@ makeDB conn = do
     run conn "insert into schema_version (version) values (1)" []
     run conn "CREATE TABLE IF NOT EXISTS poi ( id integer primary key on conflict replace autoincrement, type varchar(255), address text , lat double, lng double )" []
     run conn "CREATE TABLE IF NOT EXISTS apt ( id integer primary key, uri text, title text, price integer, address text, neighborhood, lat double, lng double, mapuri text, ws integer, ts integer, wsuri text )" []
+    run conn "CREATE TABLE IF NOT EXISTS apt_poi ( aptid integer, poiid integer, type varchar(255), dist double )" []
+    run conn "CREATE UNIQUE INDEX apt_poi_uniq on apt_poi( aptid, poiid, type )"  []
     commit conn
     return True

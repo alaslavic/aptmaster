@@ -1,14 +1,48 @@
 import CrawlerWorker
 import AptData
+import Control.Monad
+--import Control.Monad.State
+import System.Console.GetOpt
+import qualified Data.Map as Map
+import System (getArgs)
+import Data.Maybe
 
+
+options :: [OptDescr (String,String)]
+options = 
+    [ Option "v" ["verbose"] (NoArg ("verbose", "")) "verbose output"
+    , Option "h" ["help"] (NoArg ("help", "")) "this menu"
+    , Option "d" ["dbhost"] (ReqArg (\x -> ("dbhost", x)) "Hostname|Filename" ) "database host ( or filename for sqlite)"
+    , Option "u" ["dbuser"] (ReqArg (\x -> ("dbuser", x)) "Username" ) "database user"
+    , Option "p" ["dbpass"] (ReqArg (\x -> ("dbpass", x)) "Password" ) "database password"
+    , Option "t" ["dbtype"] (ReqArg (\x -> ("dbtype", x)) "sqlite|mysql|postgres" ) "database type"
+    , Option "c" ["clpage"] (ReqArg (\x -> ("clpage", x)) "URL" ) "the craigslist apartment index page you want to index" 
+    ]
+
+parseOptions :: [String] -> IO (Map.Map String String, [String])
+parseOptions argv = case getOpt Permute options argv of
+    (o,n,[]) -> return (Map.fromList o,n)
+    (_,_,er) -> ioError (userError (concat er ++ usageInfo "Usage:\n" options ) ) 
+
+
+--data CrawlerState = CrawlerState
+--    { conn :: Connection
+--    , config :: CrawlerConfig
+--    } deriving (Show)
+--
+--type CrawlerST = State CrawlerState
+--
 
 main = do
-    config <- getConfig "./crawler.json"
-    links <- getCLLinks "http://sfbay.craigslist.org/sfc/apa/"
-    conn <- aptConnect "/tmp/foo.db" "" "" "sqlite"
-    let records = map fillCLRecord links
-    let inserted = map (\r -> r >>= (aptPutCommit conn)) records
-    printstuff $ zip links inserted
+    argv <- getArgs
+    (config,leftover) <- parseOptions argv
+    if (Map.member "help" config) then ioError $ userError $ usageInfo "Usage:\n" options else return ()
+    case leftover of 
+        [] -> crawl config
+        ("crawl":_) -> 
+            crawled <- crawl config
+            printstuff crawled
+        _ -> ioError $ userError $ usageInfo "Usage:\n" options
 
 
 

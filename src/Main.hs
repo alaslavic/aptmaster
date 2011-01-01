@@ -27,7 +27,8 @@ import Data.Map as Map
 import System.Console.GetOpt
 import System (getArgs)
 import Database.HDBC
-import Database.HDBC.Sqlite3
+--import Database.HDBC.Sqlite3
+import Database.HDBC.MySQL
 import Text.Regex.PCRE as PCRE
 
 
@@ -36,6 +37,7 @@ options =
     [ Option "v" ["verbose"] (NoArg ("verbose", "")) "verbose output"
     , Option "h" ["help"] (NoArg ("help", "")) "this menu"
     , Option "d" ["dbhost"] (ReqArg (\x -> ("dbhost", x)) "Hostname|Filename" ) "database host ( or filename for sqlite)"
+    , Option "i" ["dbinst"] (ReqArg (\x -> ("dbinst", x)) "<DB>" ) "database instance"
     , Option "u" ["dbuser"] (ReqArg (\x -> ("dbuser", x)) "Username" ) "database user"
     , Option "p" ["dbpass"] (ReqArg (\x -> ("dbpass", x)) "Password" ) "database password"
     , Option "t" ["dbtype"] (ReqArg (\x -> ("dbtype", x)) "sqlite|mysql|postgres" ) "database type"
@@ -62,9 +64,11 @@ main = do
     let u = Map.findWithDefault "" "dbuser" config
     let p = Map.findWithDefault "" "dbpass" config
     let t = Map.findWithDefault "mysql" "dbtype" config
-    conn <- aptConnect h u p t
+    let i = Map.findWithDefault "test" "dbinst" config
+    conn <- aptConnect h i u p t
     let state = AppState{ appConfig=config, appConn=conn }
-    td <- newTemplateDirectory' "templates" $ bindStuff emptyTemplateState
+    --td <- newTemplateDirectory' "templates" $ bindStuff emptyTemplateState
+    td <- newTemplateDirectory' "templates" $ emptyTemplateState
     quickServer config $ templateHandler td defaultReloadHandler $ \ts ->
         --ifTop (render ts "apt") <|>
         ifTop (fileServeSingle "html/index.html") <|>
@@ -76,9 +80,9 @@ main = do
               ] <|>
         dir "static" (fileServe "static")
 
-bindStuff :: TemplateState Snap -> TemplateState Snap
-bindStuff = 
-    (bindSplice "results" resultsSplice)
+--bindStuff :: TemplateState Snap -> TemplateState Snap
+--bindStuff = 
+--    (bindSplice "results" resultsSplice)
 
 poiHandlerJson :: AppState -> Snap ()
 poiHandlerJson state = do
@@ -191,57 +195,57 @@ resultsHandlerJson state = do
         jNumOrNull Nothing = JNull
         jNumOrNull (Just n) = JNumber $ toRational n
 
-resultsSplice :: Splice Snap
-resultsSplice = do
-    --input <- getParamNode 
-    --return [Element "table" [("id","foo")] [Text "junk"]]
-    liftIO makeTable
-    where
-        query :: IO [AptRecord]
-        query = do 
-            conn <- aptConnect "/tmp/foo.db" "" "" "sqlite"
-            aptQuery conn [] [] [] 1
-        makeTable :: IO [NodeG [] ByteString ByteString]
-        makeTable = do
-            results <- query
-            rows <- makeRows results
-            let th = Element "tr" [] $ L.map hcol headers
-            return [Element "table" [("id","results")] (th:rows)]
-        makeRows :: [AptRecord] -> IO [NodeG [] ByteString ByteString]
-        makeRows rs = do
-            return $ L.map (\x -> Element "tr" [] (makeRow x)) rs
-        makeRow :: AptRecord -> [NodeG [] ByteString ByteString]
-        makeRow rec = L.map (\x -> col x ) $ columns rec
-        col :: String -> NodeG [] ByteString ByteString
-        col t = Element "td" [] [Text (B.pack t)]
-        hcol :: String -> NodeG [] ByteString ByteString
-        hcol t = Element "th" [] [Text (B.pack t)]
-        headers = 
-            [ "Id"
-            , "Uri"
-            , "Title"
-            , "Price"
-            , "Address"
-            , "Neighborhood"
-            , "Lat"
-            , "Long"
-            , "Mapuri"
-            , "Walkscore"
-            , "Transcore"
-            , "Wsuri" ]
-        columns rec =
-            [ show $  aptId rec
-            , show $  aptUri rec
-            , show $  aptTitle rec
-            , show $  aptPrice rec
-            , show $  aptAddress rec
-            , show $  aptNeighborhood rec
-            , show $  aptLat rec
-            , show $  aptLong rec
-            , show $  aptMapuri rec
-            , show $  aptWalkscore rec
-            , show $  aptTranscore rec
-            , show $  aptWsuri rec ]
+--resultsSplice :: Splice Snap
+--resultsSplice = do
+--    --input <- getParamNode 
+--    --return [Element "table" [("id","foo")] [Text "junk"]]
+--    liftIO makeTable
+--    where
+--        query :: IO [AptRecord]
+--        query = do 
+--            conn <- aptConnect "/tmp/foo.db" "" "" "sqlite"
+--            aptQuery conn [] [] [] 1
+--        makeTable :: IO [NodeG [] ByteString ByteString]
+--        makeTable = do
+--            results <- query
+--            rows <- makeRows results
+--            let th = Element "tr" [] $ L.map hcol headers
+--            return [Element "table" [("id","results")] (th:rows)]
+--        makeRows :: [AptRecord] -> IO [NodeG [] ByteString ByteString]
+--        makeRows rs = do
+--            return $ L.map (\x -> Element "tr" [] (makeRow x)) rs
+--        makeRow :: AptRecord -> [NodeG [] ByteString ByteString]
+--        makeRow rec = L.map (\x -> col x ) $ columns rec
+--        col :: String -> NodeG [] ByteString ByteString
+--        col t = Element "td" [] [Text (B.pack t)]
+--        hcol :: String -> NodeG [] ByteString ByteString
+--        hcol t = Element "th" [] [Text (B.pack t)]
+--        headers = 
+--            [ "Id"
+--            , "Uri"
+--            , "Title"
+--            , "Price"
+--            , "Address"
+--            , "Neighborhood"
+--            , "Lat"
+--            , "Long"
+--            , "Mapuri"
+--            , "Walkscore"
+--            , "Transcore"
+--            , "Wsuri" ]
+--        columns rec =
+--            [ show $  aptId rec
+--            , show $  aptUri rec
+--            , show $  aptTitle rec
+--            , show $  aptPrice rec
+--            , show $  aptAddress rec
+--            , show $  aptNeighborhood rec
+--            , show $  aptLat rec
+--            , show $  aptLong rec
+--            , show $  aptMapuri rec
+--            , show $  aptWalkscore rec
+--            , show $  aptTranscore rec
+--            , show $  aptWsuri rec ]
 
 
 echoHandler :: Snap ()

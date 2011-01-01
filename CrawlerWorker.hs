@@ -13,7 +13,8 @@ where
 
 import AptData
 
-import Database.HDBC.Sqlite3 as DB
+--import Database.HDBC.Sqlite3
+import Database.HDBC.MySQL
 import Database.HDBC
 import Network
 import Network.HTTP
@@ -44,10 +45,11 @@ crawl config = do
     let d = debug config
     d $ show config
     let host = Map.findWithDefault "localhost" "dbhost" config
+    let inst = Map.findWithDefault "test" "dbinst" config
     let user = Map.findWithDefault "" "dbuser" config
     let pass = Map.findWithDefault "" "dbpass" config
     let typ = Map.findWithDefault "mysql" "dbtype" config
-    conn <- aptConnect host user pass typ
+    conn <- aptConnect host inst user pass typ
     poi <- aptPoiQuery conn [] []
     d $ show poi
     links <- getCLLinks $ Map.findWithDefault "http://sfbay.craigslist.org/sfc/apa/" "clpage" config
@@ -69,16 +71,22 @@ addPoi config t addstr = do
     let user = Map.findWithDefault "" "dbuser" config
     let pass = Map.findWithDefault "" "dbpass" config
     let typ = Map.findWithDefault "mysql" "dbtype" config
-    conn <- aptConnect host user pass typ
+    let inst = Map.findWithDefault "test" "dbinst" config
+    conn <- aptConnect host inst user pass typ
+    d $ "attempting to geocode " ++ addstr
     (address, lat, lng) <- getGeoCode addstr
     geocode <- getGeoCode addstr
+    d $ "geocoded to " ++ (show geocode)
     case geocode of
         (Nothing,Nothing,Nothing) -> ioError $ userError "unable to geocode"
         (Just address, Just lat, Just lng) -> do
             let rec = AptPoi{ aptPoiType=t, aptPoiAddress=address, aptPoiLat=lat, aptPoiLong=lng, aptPoiId=0 }
+            d $ "attempting insert " ++ (show rec)
             put <- aptPoiPut conn rec
             commit conn
+            d $ "record inserted " ++ (show rec)
             rec' <- aptPoiQuery conn [Field "address",Equ, Value $ toSql address, And, Field "type", Equ, Value $ toSql t] []
+            d $ "record verified " ++ (show rec')
             case rec' of
                 [r] -> do return r
                 _ -> do ioError $ userError $ "unable to insert poi of " ++ typ ++ " " ++ address
@@ -259,13 +267,12 @@ getParts t =
     let
         title = head $ yuuko "//title" t
         h2 = head $ yuuko "//body/h2" t
-        m = drop 1 $ head (h2 =~ "^\\$?(\\d+)?.*?(?:\\(([^\\)]*)\\))?" :: [[String]])
+        m = (h2 =~ "^(?:\\$(\\d+))?[^\\(]+(?:\\((.+?)\\))?" :: [[String]])
     in
         case title of
             "" -> Nothing
-            _ -> 
-                Just ( title,
-                  (last m),
-                  ((read $ head m) :: Int)
-                )
+            _ -> case m of
+                [[_,"",_]] -> Nothing
+                [[_,p,n]] -> Just (title, n, (read p :: Int))
+                _ -> Nothing
 

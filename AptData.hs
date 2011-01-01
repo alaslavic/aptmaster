@@ -38,7 +38,7 @@ module AptData
 where
 
 import Database.HDBC
-import Database.HDBC.Sqlite3
+--import Database.HDBC.Sqlite3
 import Database.HDBC.MySQL
 import Data.List
 import qualified Data.Map as Map
@@ -197,7 +197,7 @@ aptPoiTypeQuery conn = do
 
 aptPoiPut :: Connection -> AptPoi -> IO Bool
 aptPoiPut conn rec = do
-    stmt <- prepare conn "insert into poi( type, address, lat, lng ) values (?,?,?,?)"
+    stmt <- prepare conn "insert into poi( type, address, lat, lng ) values (?,?,?,?) on duplicate key update type=VALUES(type), address=VALUES(address), lat=VALUES(lat), lng=VALUES(lng)"
     rslt <- execute stmt $ aptPoiToSql rec
     case rslt of 
         1 -> return True
@@ -211,7 +211,7 @@ aptPoiPutCommit conn rec = do
 
 aptPoiAssoc :: Connection -> AptRecord -> (AptPoi,Double) -> IO Bool
 aptPoiAssoc conn rec (poi,d) = do
-    stmt <- prepare conn "insert or replace into apt_poi(aptid, poiid, type,dist) values(?,?,?,?)"
+    stmt <- prepare conn "insert into apt_poi(aptid, poiid, type,dist) values(?,?,?,?) on duplicate key update aptid=VALUES(aptid), poiid=VALUES(poiid), type=VALUES(type), dist=VALUES(dist) "
     rslt <- execute stmt [toSql $ aptId rec, toSql $ aptPoiId poi, toSql $ aptPoiType poi, toSql d]
     return $ case rslt of 
         1 -> True
@@ -237,7 +237,7 @@ aptQuery conn ts ws os page = do
     let tjoin = concat $ map (\t -> "left join apt_poi as " ++ t ++ " on apt.id = " ++ t ++ ".aptid and " ++ t ++ ".type = ? " ) ts
     let tvals = map toSql ts
     let fields = ["apt.id", "apt.uri", "apt.title", "apt.price", "apt.address", "apt.neighborhood", "apt.lat", "apt.lng", "apt.mapuri", "apt.ws", "apt.ts", "apt.wsuri" ]
-    let ttext = concat $ intersperse "," ((map (\x -> drop 4 x) fields) ++ tfields)
+    let ttext = concat $ intersperse "," ((map (\x -> if (x == "apt.id") then x else drop 4 x) fields) ++ tfields)
     let s = "select " ++ ttext ++ " from apt " ++ tjoin ++ " group by apt.id limit ? offset ?"
     let poifields = ["poi.id", "poi.type", "poi.address", "poi.lat", "poi.lng", "apt_poi.dist"]
     let ftext = concat $ ( intersperse "," (fields ++ poifields) )
@@ -249,7 +249,6 @@ aptQuery conn ts ws os page = do
     stmt <- prepare conn s'
     rslt <- execute stmt (tvals ++ lv ++ wvals )
     rows <- fetchAllRows' stmt
-    --return $ Data.List.map sqlToAptRec rows
     return $ reverse $ snd $ foldr collapse (Nothing,[]) rows
     where
         collapse :: [SqlValue] -> (Maybe AptRecord,[AptRecord]) -> (Maybe AptRecord,[AptRecord])
@@ -260,7 +259,6 @@ aptQuery conn ts ws os page = do
                 d = (fromSql $ head ds) :: Double
                 rec = sqlToAptRec recf
                 poi = sqlToAptPoi poif
-            --in (Just ((sqlToAptRec recf){aptPois=[sqlToAptPoi), rs)
             in case current of 
                 Nothing -> ( Just rec{ aptPois=[(poi,d)] }, rs )
                 Just c -> if ((aptId c) == (aptId rec))
@@ -275,7 +273,7 @@ aptPutCommit conn rec = do
 
 aptPut :: Connection -> AptRecord -> IO Bool
 aptPut conn rec = do
-    stmt <- prepare conn "insert or replace into apt(id, uri,title,price,address,neighborhood,lat,lng,mapuri,ws,ts,wsuri) values ( ?,?,?,?,?,?,?,?,?,?,?,? )"
+    stmt <- prepare conn "insert into apt(id, uri,title,price,address,neighborhood,lat,lng,mapuri,ws,ts,wsuri) values ( ?,?,?,?,?,?,?,?,?,?,?,? ) on duplicate key update id=VALUES(id), uri=VALUES(uri), title=VALUES(title), price=VALUES(price), address=VALUES(address), neighborhood=VALUES(neighborhood), lat=VALUES(lat), lng=VALUES(lng), mapuri=VALUES(mapuri), ws=VALUES(ws), ts=VALUES(ts), wsuri=VALUES(wsuri)"
     rslt <- execute stmt $ aptRecToSql rec
     finish stmt
     rslts <- mapM (aptPoiAssoc conn rec) $ aptPois rec
@@ -286,31 +284,40 @@ aptPut conn rec = do
 aptConnect :: AptDBHost -> AptDBInst-> AptDBUser -> AptDBPw -> AptDBType -> IO Connection
 aptConnect host inst user pass typ =
     case (typ) of
-        "sqlite" -> do
-            conn <- connectSqlite3 host
+--        "sqlite" -> do
+--            conn <- connectSqlite3 host
+--            valid <- (handleSqlError $ aptValidateDB conn) `catch` (\e -> makeDB conn)
+--            case (valid) of
+--                True -> return conn
+--                False -> ioError $ userError $ "unable to validate connection"
+        "mysql" -> do
+            conn <- connectMySQL defaultMySQLConnectInfo { mysqlHost=host, mysqlUser=user,mysqlPassword=pass,mysqlDatabase=inst }
             valid <- (handleSqlError $ aptValidateDB conn) `catch` (\e -> makeDB conn)
             case (valid) of 
                 True -> return conn
                 False -> ioError $ userError $ "unable to validate connection"
-        "mysql" -> do
-            conn <- connectMySQL defaultMySQLConnectionInfo { mysqlHost=host, mysqlUser=user,mysqlPassword=pass,mysqlDatabase=inst }
         _ -> ioError $ userError $ "unsupported db type '" ++ typ ++ "'"
 
 aptValidateDB :: Connection -> IO Bool
 aptValidateDB conn = do 
-    getvsn <- (prepare conn "select version from schema_version")
-    execute getvsn []
+    getvsn <- (prepare conn "select value from schema_version where type = ?")
+    execute getvsn [toSql "version"]
     rslt <- fetchAllRows' getvsn
-    case (head . head $ rslt) of
-        _ -> return True
+    case ( (fromSql . head . head $ rslt ) :: Int) of
+        1 -> return True
 
 makeDB :: Connection -> IO Bool
 makeDB conn = do
-    run conn "CREATE TABLE IF NOT EXISTS schema_version ( version integer )" []
-    run conn "insert into schema_version (version) values (1)" []
-    run conn "CREATE TABLE IF NOT EXISTS poi ( id integer primary key on conflict replace autoincrement, type varchar(255), address text , lat double, lng double )" []
-    run conn "CREATE TABLE IF NOT EXISTS apt ( id integer primary key, uri text, title text, price integer, address text, neighborhood, lat double, lng double, mapuri text, ws integer, ts integer, wsuri text )" []
-    run conn "CREATE TABLE IF NOT EXISTS apt_poi ( aptid integer, poiid integer, type varchar(255), dist double )" []
-    run conn "CREATE UNIQUE INDEX apt_poi_uniq on apt_poi( aptid, poiid, type )"  []
+    run conn "CREATE TABLE IF NOT EXISTS poi ( id integer primary key auto_increment, type varchar(255) NOT NULL, address varchar(255) NOT NULL , lat double NOT NULL, lng double NOT NULL ) engine=InnoDB" []
+    run conn "CREATE UNIQUE INDEX poi_uniq on poi( type, lat, lng)" []
+    run conn "CREATE TABLE IF NOT EXISTS apt ( id integer primary key, uri text, title text, price integer, address text, neighborhood varchar(255), lat double, lng double, mapuri text, ws integer, ts integer, wsuri text, timestamp timestamp ) engine=InnoDB" []
+    run conn "CREATE INDEX apt_price on apt(price)" []
+    run conn "CREATE INDEX apt_ws on apt(ws)" []
+    run conn "CREATE INDEX apt_ts on apt(ts)" []
+    run conn "CREATE TABLE IF NOT EXISTS apt_poi ( id integer primary key auto_increment, aptid integer , poiid integer , type varchar(60), dist double ) engine=InnoDB" []
+    run conn "CREATE UNIQUE INDEX apt_poi_rel on apt_poi( aptid, poiid )"  []
+    run conn "CREATE INDEX apt_poi_dist on apt_poi( dist )"  []
+    run conn "CREATE TABLE IF NOT EXISTS schema_version ( type varchar(60) primary key, value integer )" []
+    run conn "insert into schema_version (type,value) values ('version', 1)" []
     commit conn
     return True

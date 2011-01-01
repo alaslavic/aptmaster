@@ -55,6 +55,6 @@ main = do
 printstuff :: [(String,IO Bool)] -> IO ()
 printstuff [] = return ()
 printstuff ((link,action):xs) = do
-    result <- action
+    result <- action `catch` (\e -> return False)
     putStrLn (link ++ " Returned: " ++ (show result))
     printstuff xs

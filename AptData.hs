@@ -1,5 +1,7 @@
 module AptData
 ( AptRecord(AptRecord)
+, AptWhere(And,Or,Grt,Les,Equ,Field,Value)
+, AptOrder(Asc,Desc)
 , aptId
 , aptUri
 , aptTitle
@@ -37,9 +39,11 @@ where
 
 import Database.HDBC
 import Database.HDBC.Sqlite3
+import Database.HDBC.MySQL
 import Data.List
-import Data.Map as Map
+import qualified Data.Map as Map
 import Control.Monad 
+import Data.Maybe (maybe)
 
 data AptRecord = AptRecord
     { aptId :: Int
@@ -73,6 +77,7 @@ type AptDBUser = String
 type AptDBPw = String
 type AptDBType = String
 type AptDBHost = String
+type AptDBInst = String
 
 aptRecToSql :: AptRecord -> [SqlValue]
 aptRecToSql rec = 
@@ -124,27 +129,64 @@ sqlToAptPoi [id,typ,add,lat,lng] = AptPoi
     , aptPoiLong=(fromSql lng)
     }
 
-type AptPoiMap = Map String [AptPoi]
+type AptPoiMap = Map.Map String [AptPoi]
 
-type Where = [(String,Ordering,String)]
+data AptWhere = And | Or | Grt | Les | Equ | Field String | Value SqlValue deriving (Show)
 
-aptPoiQuery :: Connection -> Where -> IO [AptPoi]
-aptPoiQuery conn wh = do
-    let q = "select * from poi"
-    let wc = foldl fwc "" wh
-    stmt <- prepare conn "select * from poi order by type"
-    execute stmt []
+data AptOrder = Asc String | Desc String deriving (Show)
+
+makeWhere :: [String] -> [AptWhere] -> Maybe (String,[SqlValue])
+makeWhere fields ws = 
+    let
+        m = foldl' ( collapse fields ) (Just ("",[])) ws
+    in
+        case m of 
+            Just (x,y) -> if ((length x) > 0) then Just (" where " ++ x, y ) else Just (x,y)
+            x -> x
+    where
+        collapse :: [String] -> Maybe (String,[SqlValue]) -> AptWhere -> Maybe (String,[SqlValue])
+        collapse _ Nothing _ = Nothing
+        collapse fields ( Just (wc,vs) ) And = Just (wc ++ " and ",vs)
+        collapse fields ( Just (wc,vs) ) Or = Just (wc ++ " or ",vs)
+        collapse fields ( Just (wc,vs) ) Grt = Just (wc ++ " > ",vs)
+        collapse fields ( Just (wc,vs) ) Les = Just (wc ++ " < ",vs)
+        collapse fields ( Just (wc,vs) ) Equ = Just (wc ++ " = ",vs)
+        collapse fields ( Just (wc,vs) ) (Field x) = if (x `elem` fields) 
+            then Just (wc ++ " ( " ++ x ,vs) 
+            else Nothing
+        collapse fields ( Just(wc,vs) ) (Value x) = Just( wc ++ " ? ) ", vs ++ [x] )
+
+makeOrder :: [String] -> [AptOrder] -> String
+makeOrder fields os = 
+    let
+        m = foldl ( collapse fields ) "" os
+    in
+        if ((length m) > 0 ) then " order by " ++ m else m
+    where
+        collapse :: [String] -> String -> AptOrder -> String
+        collapse fields os (Asc f) = if ( f `elem` fields )
+            then os ++ f ++ " Asc"
+            else os
+        collapse fields os (Desc f) = if ( f `elem` fields ) 
+            then os ++ f ++ " Desc"
+            else os
+
+aptPoiQuery :: Connection -> [AptWhere] -> [AptOrder] -> IO [AptPoi]
+aptPoiQuery conn w o= do
+    let afields = ["address", "type", "lat", "lng"]
+    let (wc,wv) = maybe ("",[]) id (makeWhere afields w)
+    let oc = makeOrder afields o
+    let q = "select * from poi " ++ wc ++ oc
+    stmt <- prepare conn q
+    execute stmt wv
     rows <- fetchAllRows' stmt
     return $ Data.List.map sqlToAptPoi rows
-    where
-        fwc :: String -> (String,String,String) -> String
-        fwc c ("address",o,kkk = c
 
  
 aptPoiQueryMap :: Connection -> IO AptPoiMap
 aptPoiQueryMap conn = do
-    ps <- aptPoiQuery conn
-    return $ foldr (\ p map -> insertWith' (\ new old -> (head new):old ) (aptPoiType p) [p] map ) Map.empty ps
+    ps <- aptPoiQuery conn [] []
+    return $ foldr (\ p map -> Map.insertWith' (\ new old -> (head new):old ) (aptPoiType p) [p] map ) Map.empty ps
 
 aptPoiTypeQuery :: Connection -> IO [String]
 aptPoiTypeQuery conn = do
@@ -177,6 +219,8 @@ aptPoiAssoc conn rec (poi,d) = do
 
 -- example query
 --select apt.id, foo.dist, bar.dist, poi.type, apt_poi.dist from apt join apt_poi as foo on apt.id = foo.aptid and foo.type = "foo" join apt_poi as bar on apt.id = bar.aptid and bar.type = "bar" join apt_poi on apt.id = apt_poi.aptid join poi on apt_poi.poiid = poi.id order by foo.dist, bar.dist;
+--  
+
 
 aptExists :: Connection -> Int -> IO Bool
 aptExists conn id = do
@@ -187,17 +231,23 @@ aptExists conn id = do
         1 -> True
         _ -> False
 
-aptQuery :: Connection -> Int -> IO [AptRecord]
-aptQuery conn page = do
-    stmt <- prepare conn "select \
-\apt.id, apt.uri, apt.title,apt.price,apt.address,apt.neighborhood,apt.lat,apt.lng,apt.mapuri,apt.ws,apt.ts,apt.wsuri, poi.id, poi.type, poi.address, poi.lat, poi.lng, apt_poi.dist \
-\from apt join apt_poi on apt.id = apt_poi.aptid jion poi on poi apt_poi.poiid  \
-\order by apt.price \
-\limit ? offset ?"
-    rslt <- execute stmt 
-        [
-        (toSql (50 :: Integer)), (toSql (50 * (page-1))) 
-        ]
+aptQuery :: Connection -> [String] -> [AptWhere] -> [AptOrder] -> Int -> IO [AptRecord]
+aptQuery conn ts ws os page = do
+    let tfields = map (\x -> "min(" ++ x ++ ".dist) as " ++ x ++ "_dist" ) ts
+    let tjoin = concat $ map (\t -> "left join apt_poi as " ++ t ++ " on apt.id = " ++ t ++ ".aptid and " ++ t ++ ".type = ? " ) ts
+    let tvals = map toSql ts
+    let fields = ["apt.id", "apt.uri", "apt.title", "apt.price", "apt.address", "apt.neighborhood", "apt.lat", "apt.lng", "apt.mapuri", "apt.ws", "apt.ts", "apt.wsuri" ]
+    let ttext = concat $ intersperse "," ((map (\x -> drop 4 x) fields) ++ tfields)
+    let s = "select " ++ ttext ++ " from apt " ++ tjoin ++ " group by apt.id limit ? offset ?"
+    let poifields = ["poi.id", "poi.type", "poi.address", "poi.lat", "poi.lng", "apt_poi.dist"]
+    let ftext = concat $ ( intersperse "," (fields ++ poifields) )
+    let (wtext,wvals) = maybe ("",[]) (\x -> x) (makeWhere ( fields ++ ( map (\t -> "apt." ++ t ++ "_dist") ts ) ) ws)
+    let otext = makeOrder ( fields ++ ( map (\t -> "apt." ++ t ++ "_dist") ts ) ) os
+    let s' = "select " ++ ftext ++ " from ( " ++ s ++ " ) as apt left join apt_poi on apt.id = apt_poi.aptid left join poi on apt_poi.poiid = poi.id " ++ wtext ++ otext;
+    let lv = [ (toSql (50 :: Integer)), (toSql (50 * (page-1))) ]
+    putStrLn s'
+    stmt <- prepare conn s'
+    rslt <- execute stmt (tvals ++ lv ++ wvals )
     rows <- fetchAllRows' stmt
     --return $ Data.List.map sqlToAptRec rows
     return $ reverse $ snd $ foldr collapse (Nothing,[]) rows
@@ -205,7 +255,7 @@ aptQuery conn page = do
         collapse :: [SqlValue] -> (Maybe AptRecord,[AptRecord]) -> (Maybe AptRecord,[AptRecord])
         collapse row (current,rs) = 
             let
-                (recf,poid) = splitAt 11 row
+                (recf,poid) = splitAt 12 row
                 (poif,ds) = splitAt 5 poid
                 d = (fromSql $ head ds) :: Double
                 rec = sqlToAptRec recf
@@ -233,8 +283,8 @@ aptPut conn rec = do
         1 -> return True
         _ -> return False
 
-aptConnect :: AptDBHost -> AptDBUser -> AptDBPw -> AptDBType -> IO Connection
-aptConnect host user pass typ =
+aptConnect :: AptDBHost -> AptDBInst-> AptDBUser -> AptDBPw -> AptDBType -> IO Connection
+aptConnect host inst user pass typ =
     case (typ) of
         "sqlite" -> do
             conn <- connectSqlite3 host
@@ -242,6 +292,8 @@ aptConnect host user pass typ =
             case (valid) of 
                 True -> return conn
                 False -> ioError $ userError $ "unable to validate connection"
+        "mysql" -> do
+            conn <- connectMySQL defaultMySQLConnectionInfo { mysqlHost=host, mysqlUser=user,mysqlPassword=pass,mysqlDatabase=inst }
         _ -> ioError $ userError $ "unsupported db type '" ++ typ ++ "'"
 
 aptValidateDB :: Connection -> IO Bool

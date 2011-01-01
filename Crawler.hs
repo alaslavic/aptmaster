@@ -13,6 +13,7 @@ options =
     [ Option "v" ["verbose"] (NoArg ("verbose", "")) "verbose output"
     , Option "h" ["help"] (NoArg ("help", "")) "this menu"
     , Option "d" ["dbhost"] (ReqArg (\x -> ("dbhost", x)) "Hostname|Filename" ) "database host ( or filename for sqlite)"
+    , Option "i" ["dbinst"] (ReqArg (\x -> ("dbinst", x)) "<DB>" ) "database instance"
     , Option "u" ["dbuser"] (ReqArg (\x -> ("dbuser", x)) "Username" ) "database user"
     , Option "p" ["dbpass"] (ReqArg (\x -> ("dbpass", x)) "Password" ) "database password"
     , Option "t" ["dbtype"] (ReqArg (\x -> ("dbtype", x)) "sqlite|mysql|postgres" ) "database type"
@@ -38,11 +39,16 @@ main = do
     (config,leftover) <- parseOptions argv
     if (Map.member "help" config) then ioError $ userError $ usageInfo "Usage:\n" options else return ()
     case leftover of 
-        [] -> crawl config
-        ("crawl":_) -> 
+        [] -> do 
             crawled <- crawl config
             printstuff crawled
-        _ -> ioError $ userError $ usageInfo "Usage:\n" options
+        ("crawl":_) -> do
+            crawled <- crawl config
+            printstuff crawled
+        ["add", "poi", typ, address] -> do
+            poi <- addPoi config typ address
+            putStrLn $ show poi
+        _ -> do ioError $ userError $ usageInfo "Usage:\n" options
 
 
 

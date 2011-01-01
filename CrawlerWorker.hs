@@ -1,5 +1,6 @@
 module CrawlerWorker
 ( getCLLinks
+, addPoi
 , fetchPage
 , fillCLRecord
 , linkId
@@ -13,6 +14,7 @@ where
 import AptData
 
 import Database.HDBC.Sqlite3 as DB
+import Database.HDBC
 import Network
 import Network.HTTP
 import Network.Browser
@@ -22,7 +24,7 @@ import Text.URI
 import Text.HTML.Yuuko
 import Text.HTML.TagSoup
 import Text.HJson hiding (toString)
-import Text.HJson.Query
+import Text.HJson.Query hiding (debug)
 import System.Console.GetOpt
 import qualified Data.Map as Map
 import System (getArgs)
@@ -37,7 +39,7 @@ debug config message = do
         True -> putStrLn message
         False -> return ()
 
-crawl :: IO [(String, IO Bool)]
+crawl :: CrawlerConfig ->  IO [(String, IO Bool)]
 crawl config = do
     let d = debug config
     d $ show config
@@ -46,7 +48,7 @@ crawl config = do
     let pass = Map.findWithDefault "" "dbpass" config
     let typ = Map.findWithDefault "mysql" "dbtype" config
     conn <- aptConnect host user pass typ
-    poi <- aptPoiQuery conn
+    poi <- aptPoiQuery conn [] []
     d $ show poi
     links <- getCLLinks $ Map.findWithDefault "http://sfbay.craigslist.org/sfc/apa/" "clpage" config
     d $ show links
@@ -57,10 +59,10 @@ crawl config = do
     let filled = map (\link -> fillCLRecord link) wanted
     let poied = map (\apt -> (return . (poiCalc poi)) =<< apt ) filled
     let inserted = map (\apt -> (aptPutCommit conn) =<< apt ) poied
-    return $ zip wante inserted
+    return $ zip wanted inserted
 
-addPoi :: String -> IO AptPoi
-addPoi config typ addstr = do
+addPoi :: CrawlerConfig -> String -> String -> IO AptPoi
+addPoi config t addstr = do
     let d = debug config
     d $ show config
     let host = Map.findWithDefault "localhost" "dbhost" config
@@ -72,8 +74,15 @@ addPoi config typ addstr = do
     geocode <- getGeoCode addstr
     case geocode of
         (Nothing,Nothing,Nothing) -> ioError $ userError "unable to geocode"
-        (Just address, Just lat, Just lng) -> 
-            let rec = AptPoi{ aptPoiType=typ, aptPoiAddress=address, aptPoiLat=lat, aptPoiLong=lng, aptPoiId 0 }
+        (Just address, Just lat, Just lng) -> do
+            let rec = AptPoi{ aptPoiType=t, aptPoiAddress=address, aptPoiLat=lat, aptPoiLong=lng, aptPoiId=0 }
+            put <- aptPoiPut conn rec
+            commit conn
+            rec' <- aptPoiQuery conn [Field "address",Equ, Value $ toSql address, And, Field "type", Equ, Value $ toSql t] []
+            case rec' of
+                [r] -> do return r
+                _ -> do ioError $ userError $ "unable to insert poi of " ++ typ ++ " " ++ address
+
 
 fetchPage :: String -> IO String
 fetchPage url = do

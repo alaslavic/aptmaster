@@ -21,6 +21,7 @@ import           System hiding (getEnv)
 import           System.Posix.Env
 import qualified Text.XHtmlCombinators.Escape as XH
 
+import Data.Map as Map
 
 data ServerConfig = ServerConfig
     { locale          :: String
@@ -57,12 +58,21 @@ emptyServerConfig = ServerConfig
     }
 
 
-commandLineConfig :: IO ServerConfig
-commandLineConfig = do
-    args <- getArgs
-    let conf = case args of
-         []        -> emptyServerConfig
-         (port':_) -> emptyServerConfig { port = read port' }
+--commandLineConfig :: IO ServerConfig
+--commandLineConfig = do
+--    args <- getArgs
+--    let conf = case args of
+--         []        -> emptyServerConfig
+--         (port':_) -> emptyServerConfig { port = read port' }
+--    locale' <- getEnv "LANG"
+--    return $ case locale' of
+--        Nothing -> conf
+--        Just l  -> conf {locale = takeWhile (\c -> isAlpha c || c == '_') l}
+
+commandLineConfig :: Map String String -> IO ServerConfig
+commandLineConfig config = do
+    let port = Map.findWithDefault "8000" "port" config
+    let conf = emptyServerConfig { port=read port }
     locale' <- getEnv "LANG"
     return $ case locale' of
         Nothing -> conf
@@ -88,9 +98,11 @@ server config handler = do
     compress = if compression config then withCompression else id
 
 
-quickServer :: Snap () -> IO ()
-quickServer = (commandLineConfig >>=) . flip server
+--quickServer :: Snap () -> IO ()
+--quickServer = (commandLineConfig >>=) . flip server
 
+quickServer :: Map String String -> Snap () -> IO ()
+quickServer config = ((commandLineConfig config) >>=) . flip server
 
 setUTF8Locale :: String -> IO ()
 setUTF8Locale locale' = do

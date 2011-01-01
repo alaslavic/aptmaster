@@ -19,39 +19,132 @@ import Control.Monad.CatchIO
 --import "monads-fd" Control.Monad.Reader
 import Control.Monad.Trans
 import Control.Monad.Reader
-import Data.List
+import Control.Monad.State
+import Data.List as L
 import AptData
 import Text.HJson
 import Data.Map as Map
+import System.Console.GetOpt
+import System (getArgs)
+import Database.HDBC
+import Database.HDBC.Sqlite3
+import Text.Regex.PCRE as PCRE
+
+
+options :: [OptDescr (String,String)]
+options = 
+    [ Option "v" ["verbose"] (NoArg ("verbose", "")) "verbose output"
+    , Option "h" ["help"] (NoArg ("help", "")) "this menu"
+    , Option "d" ["dbhost"] (ReqArg (\x -> ("dbhost", x)) "Hostname|Filename" ) "database host ( or filename for sqlite)"
+    , Option "u" ["dbuser"] (ReqArg (\x -> ("dbuser", x)) "Username" ) "database user"
+    , Option "p" ["dbpass"] (ReqArg (\x -> ("dbpass", x)) "Password" ) "database password"
+    , Option "t" ["dbtype"] (ReqArg (\x -> ("dbtype", x)) "sqlite|mysql|postgres" ) "database type"
+    , Option "P" ["port"] (ReqArg (\x -> ("port", x)) "PORT" ) "tcp port to listen on"
+    ]
+
+parseOptions :: [String] -> IO (Map.Map String String, [String])
+parseOptions argv = case getOpt Permute options argv of
+    (o,n,[]) -> return (Map.fromList o,n)
+    (_,_,er) -> ioError (userError (L.concat er ++ usageInfo "Usage:\n" options ) ) 
+
+data AppState = AppState 
+    { appConfig :: Map.Map String String
+    , appConn :: Connection
+    }
 
 
 main :: IO ()
 main = do
+    args <- getArgs
+    (config,leftover) <- parseOptions args
+    if (Map.member "help" config) then ioError $ userError $ usageInfo "Usage:\n" options else return ()
+    let h = Map.findWithDefault "localhost" "dbhost" config
+    let u = Map.findWithDefault "" "dbuser" config
+    let p = Map.findWithDefault "" "dbpass" config
+    let t = Map.findWithDefault "mysql" "dbtype" config
+    conn <- aptConnect h u p t
+    let state = AppState{ appConfig=config, appConn=conn }
     td <- newTemplateDirectory' "templates" $ bindStuff emptyTemplateState
-    quickServer $ templateHandler td defaultReloadHandler $ \ts ->
-        ifTop (render ts "apt") <|>
+    quickServer config $ templateHandler td defaultReloadHandler $ \ts ->
+        --ifTop (render ts "apt") <|>
+        ifTop (fileServeSingle "html/index.html") <|>
         --ifTop (writeBS "should be templates") <|>
         route [ ("foo", writeBS "bar")
-              , ("results/json", resultsHandlerJson)
+              , ("results/json", (resultsHandlerJson state))
+              , ("poi/json", (poiHandlerJson state))
               , ("echo/:echoparam", echoHandler)
               ] <|>
-        dir "static" (fileServe ".")
+        dir "static" (fileServe "static")
 
 bindStuff :: TemplateState Snap -> TemplateState Snap
 bindStuff = 
     (bindSplice "results" resultsSplice)
 
-resultsHandlerJson :: Snap ()
-resultsHandlerJson = do
-    results <- liftIO query
-    writeBS $ B.pack $ toString $ JArray $ Data.List.map makeObj results
+poiHandlerJson :: AppState -> Snap ()
+poiHandlerJson state = do
+    let conn = appConn state
+    ps <- liftIO $ aptPoiQuery conn [] []
+    writeBS $ B.pack $ toString $ JArray $ L.map makePoi ps
     where
+        makePoi :: AptPoi -> Json
+        makePoi p = 
+            let
+                fields = ["id","type","address","lat","lng"]
+                values = L.map (\x -> x p) $ [ n . aptPoiId, JString . aptPoiType, JString . aptPoiAddress, n . aptPoiLat, n . aptPoiLong ]
+            in JObject $ Map.fromList $ L.zip fields values
+            where
+                n :: ( Num a, Real a ) => a -> Json
+                n = JNumber . toRational
+
+resultsHandlerJson :: AppState -> Snap ()
+resultsHandlerJson state = do
+    r <- getRequest
+    let conn = appConn state
+    ts <- liftIO $ aptPoiTypeQuery conn
+    let tsfs = L.map (\x -> x ++ "_dist") ts
+    let page = 1
+    --let page = case ( maybe [] id $ rqParam "page" r ) of 
+    --    [] -> 1
+    --    (x:_) -> maybe 1 id (mkInt x)
+    liftIO $ Prelude.putStrLn (show $ rqParam "filter" r)
+    let filter = L.foldr wFold [] $ maybe [] id $ rqParam "filter" r 
+    liftIO $ Prelude.putStrLn (show filter)
+    let order = L.foldr oFold [] $ maybe [] id $ rqParam "order" r
+    results <- liftIO $ aptQuery conn ts filter order page
+    writeBS $ B.pack $ toString $ JArray $ L.map makeObj results
+    where
+        oFold :: ByteString -> [AptOrder] -> [AptOrder]
+        oFold order o = case ((B.unpack order) =~ ("^(asc|desc)(.+)$" :: String) :: [[String]] ) of
+            [[_,"asc",x]] -> (Asc x):o
+            [[_,"desc",x]] -> (Desc x):o
+            _ -> o
+        wFold :: ByteString -> [AptWhere] -> [AptWhere]
+        wFold filter w = case ((B.unpack filter) =~ ("([^<>=]*)([<>=])(.*)" :: String) :: [[String]] ) of
+            [[_,f,o,v]] -> if ( f =~ ("dist$" :: String) :: Bool ) 
+                then case ( mkDouble v ) of
+                    Nothing -> w
+                    Just x -> [Field f, op o, Value $ toSql x] ++ (wAnd w)
+                else case ( mkInt v ) of
+                    Nothing -> w
+                    Just x -> [Field f, op o, Value $ toSql x] ++ (wAnd w)
+            _ -> w
+        wAnd :: [AptWhere] -> [AptWhere]
+        wAnd [] = []
+        wAnd xs = And:xs
+        mkInt :: String -> Maybe Int
+        mkInt s = if ( s =~ ("^\\d+$" :: String) :: Bool)
+            then Just (read s :: Int)
+            else Nothing
+        mkDouble :: String -> Maybe Double
+        mkDouble s = if ( s =~ ("^\\d+\\.\\d+$" :: String) :: Bool)
+            then Just (read s :: Double)
+            else Nothing
+        op :: String -> AptWhere
+        op ">" = Grt
+        op "<" = Les
+        op "=" = Equ
         makeObj :: AptRecord -> Json
-        makeObj rec = JObject $ Map.fromList $ Data.List.zip fields $ values rec
-        query :: IO [AptRecord]
-        query = do
-            conn <- aptConnect "/tmp/foo.db" "" "" "sqlite"
-            aptQuery conn 1
+        makeObj rec = JObject $ Map.fromList $ L.zip fields $ values rec
         fields = 
             [ "id"
             , "uri"
@@ -64,7 +157,8 @@ resultsHandlerJson = do
             , "mapuri"
             , "ws"
             , "ts"
-            , "wsuri" ]
+            , "wsuri"
+            , "poi_dist" ]
         values :: AptRecord -> [Json]
         values rec =
             [ JNumber $ toRational $ aptId rec
@@ -78,7 +172,18 @@ resultsHandlerJson = do
             , jStringOrNull $  aptMapuri rec
             , jNumOrNull $ aptWalkscore rec
             , jNumOrNull $ aptTranscore rec
-            , jStringOrNull $  aptWsuri rec ]
+            , jStringOrNull $  aptWsuri rec
+            , makePois $ aptPois rec ]
+        makePois :: [(AptPoi,Double)] -> Json
+        makePois = JObject . (Map.mapMaybe (\x -> Just $ toJson x)) . (L.foldr pFold Map.empty)
+        pFold :: (AptPoi,Double) -> Map String Double -> Map String Double
+        pFold (p,d') map = 
+            let 
+                t = aptPoiType p
+                d = maybe 0.0 id $ Map.lookup t map
+            in if ( d' > d ) 
+                then Map.insert t d' map
+                else map
         jStringOrNull :: Maybe String -> Json
         jStringOrNull (Just s) = JString s
         jStringOrNull Nothing = JNull
@@ -95,18 +200,18 @@ resultsSplice = do
         query :: IO [AptRecord]
         query = do 
             conn <- aptConnect "/tmp/foo.db" "" "" "sqlite"
-            aptQuery conn 1
+            aptQuery conn [] [] [] 1
         makeTable :: IO [NodeG [] ByteString ByteString]
         makeTable = do
             results <- query
             rows <- makeRows results
-            let th = Element "tr" [] $ Data.List.map hcol headers
+            let th = Element "tr" [] $ L.map hcol headers
             return [Element "table" [("id","results")] (th:rows)]
         makeRows :: [AptRecord] -> IO [NodeG [] ByteString ByteString]
         makeRows rs = do
-            return $ Data.List.map (\x -> Element "tr" [] (makeRow x)) rs
+            return $ L.map (\x -> Element "tr" [] (makeRow x)) rs
         makeRow :: AptRecord -> [NodeG [] ByteString ByteString]
-        makeRow rec = Data.List.map (\x -> col x ) $ columns rec
+        makeRow rec = L.map (\x -> col x ) $ columns rec
         col :: String -> NodeG [] ByteString ByteString
         col t = Element "td" [] [Text (B.pack t)]
         hcol :: String -> NodeG [] ByteString ByteString

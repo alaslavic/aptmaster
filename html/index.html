@@ -1,24 +1,118 @@
 <!DOCTYPE HTML><html>
 <head>
     <title>AptMaster SF</title>
-    <script type="text/javascript" src="/static/jquery-1.4.4.js" ></script>
-    <script type="text/javascript" src="http://maps.google.com/maps/api/js?sensor=false" ></script>
+    <script type="text/javascript" src="/static/jquery-1.4.4.js" > </script>
+    <script type="text/javascript" src="http://maps.google.com/maps/api/js?sensor=false" > </script>
     <script type="text/javascript">
+        pois = {};
+        apts = {};
+
+        function displayInfo(id) {
+            apts[id]["info"].open(map, apts[id]["marker"]);
+        }
+
+        function addMarkerClick(marker,info) {
+                    google.maps.event.addListener(marker, "click", function() {
+                        info.open(map,marker);
+                    });
+        }
+
+        function getResults() {
+            $.getJSON('/results/json', {"filter": "apt.pickup_dist<1.0", "order": "ascapt.pickup_dist"}, function(as) {
+                for ( var i in as ) {
+                    var a = as[i];
+                    var m = new google.maps.Marker({
+                        "clickable": true,
+                        "title": a.title,
+                        "visible": true,
+                        "draggable": false,
+                        "map": map,
+                        "position": new google.maps.LatLng(a.lat, a.lng, false),
+                    })
+                    var i = new google.maps.InfoWindow({
+                        "content": "<pre><a href=\"" + a.uri + "\">" + a.title + "</a>\nAddress: " + a.address + "\n" + 
+                                   "WalkScore: " + a.ws + "\nTransitScore: " + a.ts + "</pre>",
+                    });
+                    apts[a.id] = {"object": a, "marker": m, "info": i };
+
+                    addMarkerClick(m,i);
+
+                    var t = document.getElementById("results");
+                    var r = t.insertRow(-1)
+                    r.insertCell(-1).innerHTML = "<div onclick=\"displayInfo(" + a.id + ")\"><small>" + a.title + "</small></div>" + "<a href=\"" + a.uri + "\"><small>(craigslist)</small></a>";
+                    r.insertCell(-1).innerHTML = a.price;
+                    r.insertCell(-1).innerHTML = a.neighborhood;
+                    r.insertCell(-1).innerHTML = "<a href=\"" + a.wsuri + "\">" + a.ws + "</a>";
+                    r.insertCell(-1).innerHTML = "<a href=\"" + a.wsuri + "\">" + a.ts + "</a>";
+                    r.insertCell(-1).innerHTML = a.poi_dist.pickup;
+                }
+            });
+        }
+
+
         function initialize() {
-            var latlng = new google.maps.LatLng(37.76, -122.42);
+            var latlng = new google.maps.LatLng(37.77, -122.42);
             var myOptions = {
-                zoom: 14,
+                zoom: 13,
                 center: latlng,
                 mapTypeId: google.maps.MapTypeId.ROADMAP
             };
             map = new google.maps.Map(document.getElementById("map_canvas"), myOptions);
+
+            $.getJSON('/poi/json', {}, function(ps) {
+                for ( var i in ps ) {
+                    var p = ps[i];
+                    var m = new google.maps.Marker({
+                        "clickable": true,
+                        "title": p.address,
+                        "visible": true,
+                        "draggable": false,
+                        "map": map,
+                        "position": new google.maps.LatLng(p.lat, p.lng, false),
+                    });
+                    pois[p.id] = {"object": p};
+                }
+            });
+
+            getResults()
         }
     </script>
+    <style type="text/css">
+    </style>
 </head>
 <body onload="initialize()">
-    <div id="main">
-        <div id="map_canvas" style="width:500px; height:400px" />
-        <div id="table_area" />
+    <div id="main" style="width: 100%;">
+        <div id="map_canvas" style="width:40%; height:600px; float: left"> </div>
+        <div id="table_area" style="width:60%; float: left;"> 
+            <table id="results" >
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Price</th>
+                        <th>Hood</th>
+                        <th>Walk</th>
+                        <th>Trans</th>
+                        <th>Pickup</th>
+                   </tr>
+                   <form>
+                   <tr>
+                        <td></td>
+                        <td>
+                            <div>Min <input type="text" name="minprice" size=4></input></div>
+                            <div>Max <input type="text" name="maxprice" size=4></input></div>
+                        </td>
+                        <td></td>
+                        <td>Min<input type="text" name="minws" size=3></input></td>
+                        <td>Min<input type="text" name="mints" size=3></input></td>
+                        <td>Min<input type="text" name="minpickup" size=3></input></td>
+                   </tr>
+                   </form>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+        </div>
+        <div style="clear: both;"> </div>
     </div>
 </body>
 </html>

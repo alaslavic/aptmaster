@@ -44,6 +44,7 @@ import Data.List
 import qualified Data.Map as Map
 import Control.Monad 
 import Data.Maybe (maybe)
+import Text.Regex.PCRE 
 
 data AptRecord = AptRecord
     { aptId :: Int
@@ -131,9 +132,13 @@ sqlToAptPoi [id,typ,add,lat,lng] = AptPoi
 
 type AptPoiMap = Map.Map String [AptPoi]
 
-data AptWhere = And | Or | Grt | Les | Equ | Field String | Value SqlValue deriving (Show)
+data AptWhere = And | Or | Grt | Les | Equ | NotNull | Null | Field String | Value SqlValue deriving (Show)
 
 data AptOrder = Asc String | Desc String deriving (Show)
+
+orderField :: AptOrder -> String
+orderField (Asc x) = x
+orderField (Desc x) = x
 
 makeWhere :: [String] -> [AptWhere] -> Maybe (String,[SqlValue])
 makeWhere fields ws = 
@@ -151,6 +156,8 @@ makeWhere fields ws =
         collapse fields ( Just (wc,vs) ) Grt = Just (wc ++ " > ",vs)
         collapse fields ( Just (wc,vs) ) Les = Just (wc ++ " < ",vs)
         collapse fields ( Just (wc,vs) ) Equ = Just (wc ++ " = ",vs)
+        collapse fields ( Just (wc,vs) ) Null = Just (wc ++ " is null ) ",vs)
+        collapse fields ( Just (wc,vs) ) NotNull = Just (wc ++ " is not null ) ",vs)
         collapse fields ( Just (wc,vs) ) (Field x) = if (x `elem` fields) 
             then Just (wc ++ " ( " ++ x ,vs) 
             else Nothing
@@ -238,19 +245,44 @@ aptQuery conn ts ws os page = do
     let tvals = map toSql ts
     let fields = ["apt.id", "apt.uri", "apt.title", "apt.price", "apt.address", "apt.neighborhood", "apt.lat", "apt.lng", "apt.mapuri", "apt.ws", "apt.ts", "apt.wsuri" ]
     let ttext = concat $ intersperse "," ((map (\x -> if (x == "apt.id") then x else drop 4 x) fields) ++ tfields)
-    let s = "select " ++ ttext ++ " from apt " ++ tjoin ++ " group by apt.id limit ? offset ?"
+    let ios = foldr distOrder [] os
+    putStrLn $ "inner ios ? :" ++ (show ios)
+    let iotext = makeOrder ( map (\t -> t ++ "_dist" ) ts ) ios
+    let (iwtext,iwvals) = maybe ("",[]) id $ makeWhere ( map (\t -> t ++ ".dist" ) ts ) $ foldr distWh [] ios
+    putStrLn $ "inner where ? :" ++ (show (iwtext,iwvals))
+    let s = "select " ++ ttext ++ " from apt " ++ tjoin ++ iwtext ++ " group by apt.id " ++ iotext ++ " limit ? offset ?"
     let poifields = ["poi.id", "poi.type", "poi.address", "poi.lat", "poi.lng", "apt_poi.dist"]
     let ftext = concat $ ( intersperse "," (fields ++ poifields) )
     let (wtext,wvals) = maybe ("",[]) (\x -> x) (makeWhere ( fields ++ ( map (\t -> "apt." ++ t ++ "_dist") ts ) ) ws)
     let otext = makeOrder ( fields ++ ( map (\t -> "apt." ++ t ++ "_dist") ts ) ) os
     let s' = "select " ++ ftext ++ " from ( " ++ s ++ " ) as apt left join apt_poi on apt.id = apt_poi.aptid left join poi on apt_poi.poiid = poi.id " ++ wtext ++ otext;
     let lv = [ (toSql (50 :: Integer)), (toSql (50 * (page-1))) ]
-    putStrLn s'
+    putStrLn $ "Running Query" ++ s'
     stmt <- prepare conn s'
-    rslt <- execute stmt (tvals ++ lv ++ wvals )
+    let values = (tvals ++ lv ++ wvals )
+    putStrLn $ "Query Values " ++ (show values)
+    rslt <- execute stmt values
     rows <- fetchAllRows' stmt
-    return $ reverse $ snd $ foldr collapse (Nothing,[]) rows
+    --return $ reverse $ snd $ foldr collapse (Nothing,[]) rows
+    let (first,rest) = foldr collapse (Nothing,[]) rows
+    return $ case first of 
+        Nothing -> rest
+        Just f -> f:rest
     where
+        distWh :: AptOrder -> [AptWhere] -> [AptWhere]
+        distWh x xs = case ((orderField x) =~ ("(.*)_dist$" :: String ) :: [[String]] ) of
+            [[_,y]] -> [Field (y ++ ".dist"), NotNull] ++ (wAnd xs)
+            _ -> xs
+        distOrder :: AptOrder -> [AptOrder] -> [AptOrder]
+        distOrder (Asc x) xs = case (x =~ ("apt\\.(.*_dist)$" :: String) :: [[String]] ) of
+            [[_,y]] -> (Asc y):xs
+            _ -> xs
+        distOrder (Desc x) xs = case (x =~ ("apt\\.(.*_dist)$" :: String) :: [[String]] ) of
+            [[_,y]] -> (Desc y):xs
+            _ -> xs
+        wAnd :: [AptWhere] -> [AptWhere]
+        wAnd [] = []
+        wAnd xs = And:xs
         collapse :: [SqlValue] -> (Maybe AptRecord,[AptRecord]) -> (Maybe AptRecord,[AptRecord])
         collapse row (current,rs) = 
             let
@@ -263,7 +295,8 @@ aptQuery conn ts ws os page = do
                 Nothing -> ( Just rec{ aptPois=[(poi,d)] }, rs )
                 Just c -> if ((aptId c) == (aptId rec))
                     then ( Just c{ aptPois=((poi,d):(aptPois c)) }, rs )
-                    else ( Just rec{ aptPois=[(poi,d)] }, (c{aptPois=(reverse $ aptPois c)}):rs )
+                    --else ( Just rec{ aptPois=[(poi,d)] }, (c{aptPois=(reverse $ aptPois c)}):rs )
+                    else ( Just rec{ aptPois=[(poi,d)] }, (c:rs) )
 
 aptPutCommit :: Connection -> AptRecord -> IO Bool
 aptPutCommit conn rec = do

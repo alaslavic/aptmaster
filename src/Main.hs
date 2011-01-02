@@ -114,7 +114,11 @@ resultsHandlerJson state = do
     let filter = L.foldr wFold [] $ maybe [] id $ rqParam "filter" r 
     liftIO $ Prelude.putStrLn (show filter)
     let order = L.foldr oFold [] $ maybe [] id $ rqParam "order" r
+    liftIO $ Prelude.putStrLn (show order)
     results <- liftIO $ aptQuery conn ts filter order page
+    liftIO $ rollback conn
+    liftIO $ Prelude.putStrLn $ "first: " ++ (show $ L.head results)
+    liftIO $ Prelude.putStrLn $ "last: " ++ (show $ L.last results)
     writeBS $ B.pack $ toString $ JArray $ L.map makeObj results
     where
         oFold :: ByteString -> [AptOrder] -> [AptOrder]
@@ -184,8 +188,8 @@ resultsHandlerJson state = do
         pFold (p,d') map = 
             let 
                 t = aptPoiType p
-                d = maybe 0.0 id $ Map.lookup t map
-            in if ( d' > d ) 
+                d = maybe 1000000.0 id $ Map.lookup t map
+            in if ( d' < d ) 
                 then Map.insert t d' map
                 else map
         jStringOrNull :: Maybe String -> Json

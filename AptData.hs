@@ -255,8 +255,8 @@ aptQuery conn ts ws os page = do
     let ftext = concat $ ( intersperse "," (fields ++ poifields) )
     let (wtext,wvals) = maybe ("",[]) (\x -> x) (makeWhere ( fields ++ ( map (\t -> "apt." ++ t ++ "_dist") ts ) ) ws)
     let otext = makeOrder ( fields ++ ( map (\t -> "apt." ++ t ++ "_dist") ts ) ) os
-    let s' = "select " ++ ftext ++ " from ( " ++ s ++ " ) as apt left join apt_poi on apt.id = apt_poi.aptid left join poi on apt_poi.poiid = poi.id " ++ wtext ++ otext;
-    let lv = [ (toSql (50 :: Integer)), (toSql (50 * (page-1))) ]
+    let s' = "select " ++ ftext ++ " from ( " ++ s ++ " ) as apt left join apt_poi on apt.id = apt_poi.aptid left join poi on apt_poi.poiid = poi.id " ++ wtext ++ otext
+    let lv = [ (toSql (50 :: Integer)), (toSql (50 * (page - 1))) ]
     putStrLn $ "Running Query" ++ s'
     stmt <- prepare conn s'
     let values = (tvals ++ lv ++ wvals )

@@ -7,7 +7,7 @@ module CrawlerWorker
 , poiCalc
 , crawl
 , CrawlerConfig
-, debug
+, CrawlerWorker.debug
 )
 where
 
@@ -25,7 +25,7 @@ import Text.URI
 import Text.HTML.Yuuko
 import Text.HTML.TagSoup
 import Text.HJson hiding (toString)
-import Text.HJson.Query hiding (debug)
+import Text.HJson.Query
 import System.Console.GetOpt
 import qualified Data.Map as Map
 import System (getArgs)
@@ -42,7 +42,7 @@ debug config message = do
 
 crawl :: CrawlerConfig ->  IO [(String, IO Bool)]
 crawl config = do
-    let d = debug config
+    let d = CrawlerWorker.debug config
     d $ show config
     let host = Map.findWithDefault "localhost" "dbhost" config
     let inst = Map.findWithDefault "test" "dbinst" config
@@ -65,7 +65,7 @@ crawl config = do
 
 addPoi :: CrawlerConfig -> String -> String -> IO AptPoi
 addPoi config t addstr = do
-    let d = debug config
+    let d = CrawlerWorker.debug config
     d $ show config
     let host = Map.findWithDefault "localhost" "dbhost" config
     let user = Map.findWithDefault "" "dbuser" config

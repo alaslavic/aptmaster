@@ -106,10 +106,8 @@ resultsHandlerJson state = do
     let conn = appConn state
     ts <- liftIO $ aptPoiTypeQuery conn
     let tsfs = L.map (\x -> x ++ "_dist") ts
-    let page = 1
-    --let page = case ( maybe [] id $ rqParam "page" r ) of 
-    --    [] -> 1
-    --    (x:_) -> maybe 1 id (mkInt x)
+    pagef <- (getParam "page") >>= (\p -> return $ B.unpack $ maybe "1" id p )
+    let page = if ( pagef =~ ("^\\d+$" :: String) ) then ( read pagef ::Int ) else 1
     liftIO $ Prelude.putStrLn (show $ rqParam "filter" r)
     let filter = L.foldr wFold [] $ maybe [] id $ rqParam "filter" r 
     liftIO $ Prelude.putStrLn (show filter)

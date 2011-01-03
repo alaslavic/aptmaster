@@ -7,19 +7,56 @@
         pois = {};
         apts = {};
 
+        page = 1;
+
+        function nextPage() {
+            page = page + 1;
+            getResults();
+        }
+
+        function prevPage() {
+            page = page - 1;
+            if ( page < 1 ) {
+                page = 1;
+            }
+            getResults();
+        }
+
+        function closeInfos() {
+            var i;
+            for ( i in apts ) {
+                var a = apts[i];
+                a.info.close();
+            }
+        }
+
         function displayInfo(id) {
+            closeInfos();
             apts[id]["info"].open(map, apts[id]["marker"]);
         }
 
         function addMarkerClick(marker,info) {
                     google.maps.event.addListener(marker, "click", function() {
+                        closeInfos();
                         info.open(map,marker);
                     });
         }
 
         function getResults() {
-            $.getJSON('/results/json', {"filter": "apt.pickup_dist<1.0", "order": "ascapt.pickup_dist"}, function(as) {
-                for ( var i in as ) {
+            $.getJSON('/results/json', {"filter": "apt.pickup_dist<1.0", "order": "ascapt.pickup_dist", "page": page}, function(as) {
+
+                var t = document.getElementById("results");
+                var j;
+                for (j in apts) {
+                    var rec = apts[j];
+                    rec.marker.setMap(null);
+                    t.deleteRow(rec.row.rowIndex);
+                    rec.info.close();
+                    delete apts[j];
+                }
+
+                var i;
+                for ( i in as ) {
                     var a = as[i];
                     var m = new google.maps.Marker({
                         "clickable": true,
@@ -33,7 +70,6 @@
                         "content": "<pre><a href=\"" + a.uri + "\">" + a.title + "</a>\nAddress: " + a.address + "\n" + 
                                    "WalkScore: " + a.ws + "\nTransitScore: " + a.ts + "</pre>",
                     });
-                    apts[a.id] = {"object": a, "marker": m, "info": i };
 
                     addMarkerClick(m,i);
 
@@ -45,6 +81,14 @@
                     r.insertCell(-1).innerHTML = "<a href=\"" + a.wsuri + "\">" + a.ws + "</a>";
                     r.insertCell(-1).innerHTML = "<a href=\"" + a.wsuri + "\">" + a.ts + "</a>";
                     r.insertCell(-1).innerHTML = a.poi_dist.pickup;
+
+                    apts[a.id] = {"object": a, "marker": m, "info": i, "row": r };
+                }
+                if ( i = 50 ) {
+                    document.getElementById("pager").innerHTML = "<a href=\"javascript: prevPage()\"><small>Prev</small></a>Page " + page + " <a href=\"javascript: nextPage()\"><small>Next</small></a>";
+                }
+                else {
+                    document.getElementById("pager").innerHTML = "<a href=\"javascript: prevPage()\"><small>Prev</small></a>Page " + page;
                 }
             });
         }
@@ -85,7 +129,7 @@
         <div id="map_canvas" style="width:40%; height:600px; float: left"> </div>
         <div id="table_area" style="width:60%; float: left;"> 
             <table id="results" >
-                <thead>
+                <!--thead-->
                     <tr>
                         <th>Title</th>
                         <th>Price</th>
@@ -96,7 +140,7 @@
                    </tr>
                    <form>
                    <tr>
-                        <td></td>
+                        <td id="pager"></td>
                         <td>
                             <div>Min <input type="text" name="minprice" size=4></input></div>
                             <div>Max <input type="text" name="maxprice" size=4></input></div>
@@ -107,9 +151,9 @@
                         <td>Min<input type="text" name="minpickup" size=3></input></td>
                    </tr>
                    </form>
-                </thead>
-                <tbody>
-                </tbody>
+                <!--/thead-->
+                <!--tbody>
+                </tbody-->
             </table>
         </div>
         <div style="clear: both;"> </div>
